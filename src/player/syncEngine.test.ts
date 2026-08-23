@@ -123,6 +123,13 @@ describe('SyncEngine: registration, master election, mute/volume discipline', ()
     expect(screen.volume).toBe(1)
   })
 
+  it('(d2) volume getter reports the last value passed to setVolume, defaulting to 1', () => {
+    const engine = new SyncEngine()
+    expect(engine.volume).toBe(1)
+    engine.setVolume(0.4)
+    expect(engine.volume).toBe(0.4)
+  })
+
   it('(e) onMasterChange fires with the new master id on election, and with null after the master unregisters', () => {
     const onMasterChange = vi.fn()
     const engine = new SyncEngine({ onMasterChange })

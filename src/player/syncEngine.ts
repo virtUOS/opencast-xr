@@ -404,6 +404,19 @@ export class SyncEngine {
     this.applyAudio()
   }
 
+  /**
+   * The engine's own notion of volume - the value set via `setVolume`, not
+   * any particular element's `.volume` (a slave's is always 0-irrelevant
+   * since it's muted, and even the master's could in principle be nudged by
+   * something outside the engine). Needed by a volume control (Task 13) that
+   * has to know what to display and step from on mount/remount, when it has
+   * no reactive store field of its own to read - the same reason `playing`
+   * exists as a getter for intent.
+   */
+  get volume(): number {
+    return this.masterVolume
+  }
+
   tick(): void {
     this.reconcileStall()
     if (this.stalled || !this.intentPlaying) return

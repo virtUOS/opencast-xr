@@ -1,6 +1,7 @@
 import { createStore } from 'zustand'
 import type { Episode, Series } from '../opencast/types'
 import { selectStreams } from '../opencast/selectTracks'
+import { formatDuration } from '../time'
 
 /**
  * The slice of OpencastClient this module actually calls. Kept as a
@@ -99,18 +100,13 @@ export function seriesTiles(series: Series[]): LibraryTile[] {
   return [...series.map((s) => ({ id: s.id, title: s.title })), { id: SINGLES_TILE_ID, title: SINGLES_TITLE }]
 }
 
-function pad2(n: number): string {
-  return String(n).padStart(2, '0')
-}
-
-/** "H:MM:SS" - hours unpadded (matches common media-player convention: "1:02:03", not "01:02:03"). */
-export function formatDuration(durationMs: number): string {
-  const totalSeconds = Math.round(durationMs / 1000)
-  const h = Math.floor(totalSeconds / 3600)
-  const m = Math.floor((totalSeconds % 3600) / 60)
-  const s = totalSeconds % 60
-  return `${h}:${pad2(m)}:${pad2(s)}`
-}
+// Re-exported (not just imported for local use) because this module's own
+// tests import `formatDuration` from here - it originated in this file
+// (Task 11) before Task 13's dock timeline needed the same h/m/s split logic
+// in a different shape ("M:SS" under an hour). Rather than duplicate the
+// div/mod arithmetic, both now go through `../time`, which is what actually
+// owns it; this file keeps re-exporting the name so nothing else has to change.
+export { formatDuration } from '../time'
 
 /** ISO date substring (YYYY-MM-DD) - deterministic across locales/timezones (and tests), unlike toLocaleDateString. */
 function formatDate(created: string | undefined): string | undefined {

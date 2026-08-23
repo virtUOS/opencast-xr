@@ -9,6 +9,8 @@ import { OpencastClient } from './opencast/client'
 import { createPlayerStore } from './player/store'
 import { LibraryWindow } from './windows/LibraryWindow'
 import { VideoWindows } from './windows/VideoWindows'
+import { DockTransport } from './windows/DockTransport'
+import { ControlsWindow } from './windows/ControlsWindow'
 import { SyntheticDualStreamClient } from './dev/syntheticDualStream'
 
 /**
@@ -192,13 +194,20 @@ export function App() {
           <WindowShell
             radius={SHELL_RADIUS}
             curved={false}
-            // Task 13 mounts <DockTransport/> here (Play/Pause, timeline+seek,
-            // "Bibliothek"-button — player mode only). Left undefined rather
-            // than an empty fragment so the dock renders its own default
+            // Player mode only ("Browse mode shows no transport", Task 13's
+            // brief) - undefined rather than an empty fragment while
+            // browsing, so the dock renders its own default
             // Arrange/Recenter/Exit-VR buttons with no app slot beside them.
-            dockControls={undefined}
+            dockControls={mode === 'player' ? <DockTransport store={playerStore} /> : undefined}
           >
-            {mode === 'browse' ? <LibraryWindow store={playerStore} /> : <VideoWindows store={playerStore} />}
+            {mode === 'browse' ? (
+              <LibraryWindow store={playerStore} />
+            ) : (
+              <>
+                <VideoWindows store={playerStore} />
+                <ControlsWindow store={playerStore} />
+              </>
+            )}
           </WindowShell>
         </XR>
       </Canvas>
