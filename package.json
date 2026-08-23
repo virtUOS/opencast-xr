@@ -15,7 +15,8 @@
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "sphere-shell": "workspace:*",
-    "three": "^0.175.0"
+    "three": "^0.175.0",
+    "zustand": "^5.0.0"
   },
   "devDependencies": {
     "@types/react": "^19.0.0",
