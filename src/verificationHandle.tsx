@@ -39,6 +39,37 @@ export function VerificationHandle({ store }: { store: PlayerStoreApi }) {
       pump: (n = 6) => {
         for (let i = 0; i < n; i++) advance(performance.now() + i * 16, true)
       },
+      /**
+       * One numeric snapshot of every stream and its element, for the video
+       * window / sync-engine verification (Task 12): drift is
+       * `sample()[i].currentTime` differences, `masterId` plus `muted` is the
+       * audio handover, and a stream whose `open` is false must report no
+       * element at all - the store destroys it (src dropped, load(), removed
+       * from the DOM), which is what "really unload" means.
+       */
+      sample: () => {
+        const state = store.getState()
+        return {
+          masterId: state.engine.masterId,
+          playing: state.engine.playing,
+          stalled: state.stalled,
+          currentTimeS: state.currentTimeS,
+          domVideos: document.querySelectorAll('video').length,
+          streams: state.streams.map((s) => {
+            const el = state.getElement(s.flavorType)
+            return {
+              flavorType: s.flavorType,
+              open: s.open,
+              src: el?.getAttribute('src') ?? null,
+              currentTime: el?.currentTime ?? null,
+              muted: el?.muted ?? null,
+              paused: el?.paused ?? null,
+              readyState: el?.readyState ?? null,
+              playbackRate: el?.playbackRate ?? null,
+            }
+          }),
+        }
+      },
     }
     ;(window as unknown as Record<string, unknown>).__opencastPlayer = api
     return () => {

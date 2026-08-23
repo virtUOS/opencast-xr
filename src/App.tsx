@@ -2,13 +2,14 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Canvas } from '@react-three/fiber'
 import { XR } from '@react-three/xr'
 import { useStore } from 'zustand'
-import { Container, Text } from '@react-three/uikit'
-import { WindowShell, Window } from 'sphere-shell'
+import { WindowShell } from 'sphere-shell'
 import { SHELL_RADIUS, xrStore } from './xrStore'
 import { VerificationHandle } from './verificationHandle'
 import { OpencastClient } from './opencast/client'
 import { createPlayerStore } from './player/store'
 import { LibraryWindow } from './windows/LibraryWindow'
+import { VideoWindows } from './windows/VideoWindows'
+import { SyntheticDualStreamClient } from './dev/syntheticDualStream'
 
 /**
  * Why WebXR is or isn't available, as a short line we can render on screen.
@@ -39,23 +40,6 @@ function describeXrEnvironment(): XrStatus | null {
   return null
 }
 
-/**
- * Placeholder for player mode. Task 12 replaces this with the real
- * `src/windows/VideoWindows.tsx` (one `<Window>` per open stream, wired to
- * `store.streams`/`getElement`/`closeStream`/`reopenStream`); this task only
- * needs the two modes to be visibly distinct on screen.
- */
-function PlayerWindows() {
-  return (
-    <Window id="player-placeholder" title="Player" size={{ width: 44, height: 30 }}
-            position={{ azimuth: 0, elevation: 0 }}>
-      <Container flexGrow={1} flexDirection="column" alignItems="center" justifyContent="center" padding={10}>
-        <Text fontSize={16} color="#ffffff">Player (Platzhalter — Task 12)</Text>
-      </Container>
-    </Window>
-  )
-}
-
 export function App() {
   // One OpencastClient + one PlayerStore per <App> mount, not module-level
   // like xrStore.ts. xrStore has to be module-level because it's imported by
@@ -67,12 +51,38 @@ export function App() {
   // naturally with a component's mount/unmount rather than a module-level
   // singleton that would either leak its 250ms tick interval across HMR
   // reloads or need its own ad hoc "was it already disposed" guard.
-  const client = useMemo(() => new OpencastClient(), [])
+  //
+  // In a dev build the client is the SyntheticDualStreamClient subclass, so the
+  // „Zweiter Stream (Test)" checkbox below has something to switch (see
+  // dev/syntheticDualStream.ts for why the duplicate stream is the only way to
+  // exercise the sync engine against develop.opencast.org, whose recordings all
+  // have a single video flavor). A production build gets the plain client and
+  // never renders the checkbox.
+  const client = useMemo(
+    () => (import.meta.env.DEV ? new SyntheticDualStreamClient() : new OpencastClient()),
+    [],
+  )
   const playerStore = useMemo(() => createPlayerStore(client), [client])
   useEffect(() => {
     return () => playerStore.getState().dispose()
   }, [playerStore])
   const mode = useStore(playerStore, (s) => s.mode)
+
+  // Non-null exactly in a dev build (see the client memo above). Held as its own
+  // binding so the checkbox's presence is tied to the client that can actually
+  // honour it, rather than to a second, independent `import.meta.env.DEV` test.
+  const devClient = client instanceof SyntheticDualStreamClient ? client : null
+  const [syntheticSecondStream, setSyntheticSecondStream] = useState(false)
+  const toggleSyntheticSecondStream = useCallback(
+    (on: boolean) => {
+      // The flag lives on the client (read per getEpisode call), not in React
+      // state - the store must not be rebuilt for it. React state here is only
+      // the checkbox's own appearance.
+      if (devClient) devClient.syntheticSecondStream = on
+      setSyntheticSecondStream(on)
+    },
+    [devClient],
+  )
 
   const [xrStatus, setXrStatus] = useState<XrStatus>({ kind: 'checking' })
   const [enterError, setEnterError] = useState<string | null>(null)
@@ -131,6 +141,23 @@ export function App() {
             {enterError}
           </span>
         )}
+        {devClient && (
+          <label
+            style={{
+              color: '#e8e8ee', background: '#22222a', border: '1px solid #44444e',
+              borderRadius: 4, padding: '6px 10px', font: '12px system-ui, sans-serif',
+              display: 'flex', gap: 6, alignItems: 'center',
+            }}
+            title="Dupliziert die einzige Videospur der nächsten geöffneten Aufzeichnung als zweiten Stream (presentation/synthetic) — nur für Entwicklung."
+          >
+            <input
+              type="checkbox"
+              checked={syntheticSecondStream}
+              onChange={(e) => toggleSyntheticSecondStream(e.target.checked)}
+            />
+            Zweiter Stream (Test)
+          </label>
+        )}
         {xrStatus.kind !== 'ready' && (
           <span
             style={{
@@ -163,7 +190,7 @@ export function App() {
             // Arrange/Recenter/Exit-VR buttons with no app slot beside them.
             dockControls={undefined}
           >
-            {mode === 'browse' ? <LibraryWindow store={playerStore} /> : <PlayerWindows />}
+            {mode === 'browse' ? <LibraryWindow store={playerStore} /> : <VideoWindows store={playerStore} />}
           </WindowShell>
         </XR>
       </Canvas>
