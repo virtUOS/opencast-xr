@@ -29,6 +29,23 @@ class FakeVideo implements VideoLike {
   }
 }
 
+/**
+ * The binding invariant across every stall-related test: the engine must
+ * never claim it's still catching up on buffering while something is
+ * actually running. If the engine intends to play and any of the given
+ * videos is under-buffered, EVERY one of them must be paused right now -
+ * regardless of whether that pause came from the stall mechanism or from
+ * something else (a manually-paused video, by definition, is already
+ * paused, so it never violates this). Call after any engine call that
+ * could change buffering or a video's paused state.
+ */
+function assertStallInvariant(engine: SyncEngine, videos: FakeVideo[]): void {
+  const isBuffering = videos.some((v) => v.readyState < 3)
+  if (engine.playing && isBuffering) {
+    for (const v of videos) expect(v.paused).toBe(true)
+  }
+}
+
 describe('SyncEngine: registration, master election, mute/volume discipline', () => {
   it('(a) master is chosen by lowest preference, regardless of registration order', () => {
     const engine = new SyncEngine()
@@ -386,6 +403,7 @@ describe('SyncEngine: stall detection and recovery', () => {
     expect(onStall).toHaveBeenCalledWith(true)
     // Intent survives the stall: the engine was told to play and still means it.
     expect(engine.playing).toBe(true)
+    assertStallInvariant(engine, [master, slave])
   })
 
   it('(b) once readyState recovers, tick() resumes playback and fires onStall(false)', () => {
@@ -434,6 +452,7 @@ describe('SyncEngine: stall detection and recovery', () => {
     expect(slave.paused).toBe(true)
     expect(sideStream.paused).toBe(true) // already paused, unaffected either way
     expect(onStall).toHaveBeenCalledWith(true)
+    assertStallInvariant(engine, [master, slave, sideStream])
 
     slave.readyState = 4
     engine.tick()
@@ -590,10 +609,53 @@ describe('SyncEngine: stall detection and recovery', () => {
     engine.tick()
 
     // The regression this guards: onStall(false) firing while the element
-    // was never actually told to play, because enterStall() found nobody
+    // was never actually told to play, because the stall check found nobody
     // to resume (it looked "already paused, not our concern" at the moment
-    // detectStall() ran before the fan-out).
+    // it ran before the fan-out).
     expect(video.paused).toBe(false)
     expect(onStall).toHaveBeenCalledWith(false)
+  })
+
+  it('(k) [fix round 3] a redundant play() while genuinely still stalled re-pauses whatever it unpaused, with no duplicate onStall(true)', () => {
+    const onStall = vi.fn()
+    const engine = new SyncEngine({ onStall })
+    const master = new FakeVideo()
+    const slave = new FakeVideo()
+    engine.register('master', master, 0)
+    engine.register('slave', slave, 1)
+    engine.play()
+
+    slave.readyState = 1
+    engine.tick() // stall begins
+    expect(onStall.mock.calls).toEqual([[true]])
+    expect(master.paused).toBe(true)
+    expect(slave.paused).toBe(true)
+    assertStallInvariant(engine, [master, slave])
+
+    // Redundant play() while STILL genuinely buffering (readyState never
+    // recovered) - a UI double-click, or a StrictMode effect re-invoking.
+    // Its fan-out unconditionally unpauses everything; reconciliation must
+    // immediately re-pause and re-track both, with no second onStall(true).
+    engine.play()
+
+    expect(master.paused).toBe(true)
+    expect(slave.paused).toBe(true)
+    expect(onStall.mock.calls).toEqual([[true]]) // still just the one edge
+    expect(engine.playing).toBe(true)
+    assertStallInvariant(engine, [master, slave])
+
+    // A second redundant play(), for good measure - still idempotent.
+    engine.play()
+    expect(onStall.mock.calls).toEqual([[true]])
+    assertStallInvariant(engine, [master, slave])
+
+    // Genuine recovery still works after all that: nothing was lost from
+    // pausedForStall by the redundant calls.
+    slave.readyState = 4
+    engine.tick()
+
+    expect(master.paused).toBe(false)
+    expect(slave.paused).toBe(false)
+    expect(onStall.mock.calls).toEqual([[true], [false]])
   })
 })

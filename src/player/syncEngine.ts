@@ -82,24 +82,22 @@ export class SyncEngine {
       video.muted = true
     }
 
-    this.reconcileToIntent(id, video)
+    this.reconcileToIntent(video)
   }
 
   /**
    * Brings a just-(re)registered video's element state in line with the
    * engine's current intent, so a newcomer joining mid-playback doesn't sit
-   * paused forever waiting for the next explicit play()/tick(). While a
-   * stall is active it can't be started directly - added to pausedForStall
-   * instead, so exitStall's resume pass picks it up exactly like anything
-   * the stall itself paused.
+   * paused forever waiting for the next explicit play()/tick(). Plays it
+   * unconditionally (if intent is playing) and lets reconcileStall() sort
+   * out whether that has to be walked straight back - e.g. the newcomer
+   * itself is under-buffered, or a stall is already active for an unrelated
+   * reason - exactly like it would for any other video.
    */
-  private reconcileToIntent(id: string, video: VideoLike): void {
+  private reconcileToIntent(video: VideoLike): void {
     if (!this.intentPlaying) return
-    if (this.stalled) {
-      this.pausedForStall.add(id)
-      return
-    }
     safePlay(video)
+    this.reconcileStall()
   }
 
   unregister(id: string): void {
@@ -114,6 +112,9 @@ export class SyncEngine {
       this.currentMasterId = null
       this.events.onMasterChange?.(null)
     }
+
+    // Removing the buffering video can itself resolve a stall.
+    this.reconcileStall()
   }
 
   get masterId(): string | null {
@@ -135,35 +136,35 @@ export class SyncEngine {
 
   play(): void {
     this.intentPlaying = true
-    // Unconditional fan-out FIRST, detectStall() AFTER - order matters.
+    // Unconditional fan-out FIRST, reconcileStall() AFTER - order matters.
     // safePlay() flips each video's `paused` to false synchronously (real
     // <video> elements do this too: play() sets paused=false immediately,
-    // independent of whether enough data has buffered yet). enterStall()
-    // decides who it owes a resume by checking `!video.paused` - so running
-    // detectStall() first (the previous ordering) meant a still-buffering
-    // element that had never been played yet (paused===true from a fresh
-    // registration, or from a prior pause()) looked exactly like a video
-    // the caller genuinely wants paused: enterStall() recorded nobody for
-    // it, onStall(true) fired, and play() returned without ever calling
-    // .play() on it - so recovery's onStall(false) would fire with that
-    // element still stopped forever. Playing everything first, then
-    // re-checking for a stall, means a buffering element is already
-    // "wants to be playing" by the time enterStall looks at it, so it's
-    // correctly captured for the stall's own resume pass.
+    // independent of whether enough data has buffered yet). reconcileStall()
+    // decides who it owes a resume by looking at who's currently unpaused -
+    // so running it first (an earlier version of this fix) meant a
+    // still-buffering element that had never been played yet (paused===true
+    // from a fresh registration, or from a prior pause()) looked exactly
+    // like a video the caller genuinely wants paused: it was never tracked
+    // for resume, and recovery's onStall(false) would fire with that
+    // element still stopped forever.
+    //
+    // This also covers a REDUNDANT play() while a stall is already active
+    // (a double-click, a StrictMode re-invoke): the fan-out below
+    // unconditionally unpauses everything, including whatever the stall had
+    // paused - but reconcileStall() runs on every path through here, so it
+    // immediately re-pauses and re-tracks anything still genuinely
+    // buffering, rather than leaving the engine claiming "stalled" while
+    // elements actually play. reconcileStall() is idempotent (see its own
+    // comment), so this is safe to call unconditionally on every play().
     for (const { video } of this.entries.values()) safePlay(video)
-    // Re-check right now rather than waiting for an external tick(): if a
-    // stall had already cleared (readyState recovered) while nothing was
-    // driving tick() - e.g. the caller paused, which stops the rAF/interval
-    // that would otherwise notice - this resolves it immediately instead of
-    // leaving playback wedged until some future tick() happens to run.
-    this.detectStall()
+    this.reconcileStall()
   }
 
   pause(): void {
     this.intentPlaying = false
     // Pausing ends any active stall too: "stalled" only means anything while
     // the engine intends to play. Otherwise a stall entered while playing,
-    // followed by pause(), would wedge `stalled` true forever - detectStall()
+    // followed by pause(), would wedge `stalled` true forever - reconcileStall()
     // early-returns on !intentPlaying, so nothing would ever fire the exit
     // edge or clear it, and a later play() would then see `stalled` still
     // true and refuse to start anything.
@@ -196,7 +197,7 @@ export class SyncEngine {
   }
 
   tick(): void {
-    this.detectStall()
+    this.reconcileStall()
     if (this.stalled || !this.intentPlaying) return
     if (!this.currentMasterId) return
 
@@ -253,36 +254,51 @@ export class SyncEngine {
     video.playbackRate = drift < 0 ? CATCHUP_RATE : SLOWDOWN_RATE
   }
 
-  private detectStall(): void {
+  /**
+   * Enforces the stall invariant IDEMPOTENTLY: safe to call after every
+   * public method that could have changed either buffering or an element's
+   * paused state, not just once per genuine edge transition. That's what
+   * closes the family of "a redundant call unpauses something and nobody
+   * notices" bugs (a second play() while already stalled, a newcomer
+   * registered mid-stall, ...): every call re-derives the invariant from
+   * CURRENT state rather than trusting that nothing changed since the last
+   * check.
+   *
+   * - While playing and anything is under-buffered: every video that's
+   *   currently NOT paused gets paused right now and added to
+   *   pausedForStall, so it's owed a resume once buffering clears. This
+   *   runs on EVERY call while buffering persists, not only on the
+   *   false -> true transition - onStall(true) itself still only fires on
+   *   that transition, so callers never see a duplicate.
+   * - Once nothing is buffering and a stall was active: resumes exactly the
+   *   videos this mechanism paused (pausedForStall), never anything a
+   *   caller paused independently of intent, and fires onStall(false).
+   */
+  private reconcileStall(): void {
     if (!this.intentPlaying) return
 
     const isBuffering = [...this.entries.values()].some((e) => e.video.readyState < 3)
 
-    if (isBuffering && !this.stalled) {
-      this.enterStall()
-    } else if (!isBuffering && this.stalled) {
-      this.exitStall()
-    }
-  }
-
-  private enterStall(): void {
-    this.stalled = true
-    this.pausedForStall.clear()
-    for (const [id, entry] of this.entries) {
-      if (!entry.video.paused) {
-        entry.video.pause()
-        this.pausedForStall.add(id)
+    if (isBuffering) {
+      const wasStalled = this.stalled
+      this.stalled = true
+      for (const [id, entry] of this.entries) {
+        if (!entry.video.paused) {
+          entry.video.pause()
+          this.pausedForStall.add(id)
+        }
       }
+      if (!wasStalled) this.events.onStall?.(true)
+      return
     }
-    this.events.onStall?.(true)
-  }
 
-  private exitStall(): void {
-    this.stalled = false
-    for (const [id, entry] of this.entries) {
-      if (this.pausedForStall.has(id)) safePlay(entry.video)
+    if (this.stalled) {
+      this.stalled = false
+      for (const [id, entry] of this.entries) {
+        if (this.pausedForStall.has(id)) safePlay(entry.video)
+      }
+      this.pausedForStall.clear()
+      this.events.onStall?.(false)
     }
-    this.pausedForStall.clear()
-    this.events.onStall?.(false)
   }
 }
