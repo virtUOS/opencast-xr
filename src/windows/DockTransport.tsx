@@ -91,6 +91,64 @@ const TRACK_HEIGHT_PX = 6
  * intermediate states, effectively unusable) fraction and look indistinguishable
  * from "no hit at all" during quick manual testing. There is no depth
  * constraint on this component's JSX; nest the track however reads best.
+ *
+ * ## KNOWN LIMITATION: scrubbing is flat-plane-only, wrong under EXPERIMENTAL curved mode
+ *
+ * (Code review round 2.) The dock participates in sphere-shell's
+ * EXPERIMENTAL cylindrical bend (`Dock.tsx` calls `useCylindricalBend` on its
+ * own group, and its in-scene "Curved" toggle can turn it on at runtime
+ * regardless of `App.tsx`'s initial `curved` prop to `<WindowShell>`) - and
+ * `rayToTrackFraction` always intersects the real ray against the track's
+ * FLAT `matrixWorld` plane, with no bend correction. That is CORRECT for the
+ * default, shipped, hardware-validated flat mode (`curved={false}`), where
+ * there is no bend to correct for. It is WRONG whenever the dock is curved.
+ *
+ * This is a **regression for a plain click specifically** versus the
+ * pre-round-1 code, which read `e.point`: uikit's own hit-testing
+ * (`patchRaycastForBend` in sphere-shell) substitutes a bend-corrected ray
+ * before calling the stock flat-quad raycast, so the `Intersection.point` it
+ * records IS already bend-corrected - accurate for a plain click. But that
+ * substitution is undone (the real ray's direction is restored) in a
+ * `finally` block before any handler runs, specifically so `e.ray` stays the
+ * TRUE, uncorrected ray for everyone else - which is exactly the field this
+ * component now reads, for the unrelated (and more serious) reason that
+ * `e.point` freezes solid during a pointer-captured drag (see
+ * `timelineDrag.ts`). There is no reading of `e.ray`/`e.point` that is
+ * simultaneously bend-aware AND capture-safe without doing the bend math
+ * ourselves - which is exactly what a proper fix needs to do.
+ *
+ * **Why it isn't fixed here.** A correct fix means intersecting `e.ray`
+ * against the actual CYLINDER the dock is bent onto (the analogue of
+ * `useDragOnSphere` intersecting the shell sphere) and mapping the hit back
+ * to this track's own local X. That cylinder's axis and radius are defined
+ * in the DOCK's own bend-group local frame (`Dock.tsx`'s internal
+ * `groupRef`, fed to `useCylindricalBend` - NOT the shell's `anchorRef`,
+ * which is a different, unrotated ancestor: the dock sits at its own
+ * `panelTransform({azimuth: 0, elevation: DOCK_ELEVATION}, ...)` offset from
+ * the anchor, and a nonzero elevation TILTS the dock's local Y away from the
+ * anchor's/world's vertical - so building the cylinder from `anchorRef`
+ * alone would use the wrong axis orientation). Nothing sphere-shell exports
+ * today reaches that group, its `matrixWorld`, or the live `BendUniforms`
+ * `useCylindricalBend` computes for it, from code rendered inside the
+ * `dockControls` slot - `useShellContext()` exposes only `anchorRef`, and
+ * the dock's own bend transform is private to `Dock.tsx`. Reconstructing it
+ * by duplicating `Dock.tsx`'s private layout constants would ALSO still be
+ * short one more unknown - this track's own horizontal offset within the
+ * dock's flex row, which depends on the live widths of every tile/button
+ * to its left and cannot be derived without literally re-running uikit's
+ * flex layout. Flagged to the task's controller as `NEEDS_CONTEXT` rather
+ * than shipped as a silent approximation; see `docs/UIKIT-NOTES.md` entry 4
+ * for the full ray-vs-point-vs-bend story and
+ * `.superpowers/sdd/2026-08-23-opencast-player/task-13-report.md` for the
+ * exact missing-API proposal.
+ *
+ * **Practical effect today:** in flat mode (default), scrubbing is exact.
+ * In curved mode, a click/drag still moves the fill and seeks in the right
+ * DIRECTION and stays monotonic, but the landed time is off by an amount
+ * that grows with how far the track sits from the dock's own azimuthal
+ * centre and with the bend angle - most noticeable near the track's own
+ * edges. Not a crash, not a stuck/frozen preview (that specific bug is
+ * fixed) - a `curved`-only numeric inaccuracy.
  */
 export function DockTransport({ store }: { store: PlayerStoreApi }) {
   const episode = useStore(store, (s) => s.episode)
