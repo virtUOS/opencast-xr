@@ -20,16 +20,35 @@ interface RegisteredVideo {
 }
 
 /**
- * The election rule, in one place: the LOWEST preference number wins.
+ * Is `candidate` a better master than the incumbent best? Lower preference
+ * wins; equal never displaces (that's the registration-order tie-break).
+ *
+ * NaN sorts LAST rather than poisoning the comparison: `NaN < x` and
+ * `x < NaN` are both false, so a naive `<` would let an unusable preference
+ * that happened to be seen first block every comparable candidate behind it.
+ * A stream whose preference is NaN is a last resort - electable, because the
+ * engine's "non-empty registry has a master" invariant matters more than the
+ * caller's arithmetic mistake, but never in front of a usable one.
+ */
+function beatsIncumbent(candidate: number, incumbent: number): boolean {
+  if (Number.isNaN(incumbent)) return !Number.isNaN(candidate)
+  return candidate < incumbent
+}
+
+/**
+ * The election rule, in one place: the LOWEST preference number wins, and a
+ * non-empty candidate set ALWAYS elects someone (only an empty one yields
+ * null) - that's what keeps a populated registry from ending up masterless
+ * and therefore silent.
  *
  * TIE-BREAK: a preference tie is broken by REGISTRATION ORDER - the
  * earliest-registered candidate wins - which falls out of `Map`'s
- * insertion-order iteration plus the strict `<` below (a later candidate with
- * an equal preference never displaces the incumbent best). Note that
- * re-registering an existing id keeps its ORIGINAL insertion position (that's
- * `Map.set` semantics), so "registration order" means when the id was first
- * seen, not when it was last refreshed - which is what makes an element swap
- * under a stable id election-neutral.
+ * insertion-order iteration plus `beatsIncumbent`'s strict comparison (a later
+ * candidate with an equal preference never displaces the incumbent best). Note
+ * that re-registering an existing id keeps its ORIGINAL insertion position
+ * (that's `Map.set` semantics), so "registration order" means when the id was
+ * first seen, not when it was last refreshed - which is what makes an element
+ * swap under a stable id election-neutral.
  *
  * Deliberately a free function over a structural `{ preference }` map rather
  * than a method: election is pure, so it's unit-testable on its own, and
@@ -40,9 +59,12 @@ export function electMaster(
   candidates: ReadonlyMap<string, { readonly preference: number }>,
 ): string | null {
   let bestId: string | null = null
-  let bestPreference = Number.POSITIVE_INFINITY
+  let bestPreference = Number.NaN
   for (const [id, { preference }] of candidates) {
-    if (preference < bestPreference) {
+    // `bestId === null` first: the seed is "nobody yet", not "preference
+    // Infinity" - seeding with a sentinel number is what made NaN (and, for
+    // a naive seed, Infinity itself) electable-or-not by accident.
+    if (bestId === null || beatsIncumbent(preference, bestPreference)) {
       bestId = id
       bestPreference = preference
     }
@@ -71,12 +93,27 @@ function safePlay(video: VideoLike): void {
  * changing intent, so recovery resumes exactly what the stall itself paused.
  *
  * The registry is DYNAMIC: streams come and go mid-session. Every mutation
- * (register or unregister) re-runs the same election (`electMaster`), so the
- * invariant "a non-empty registry always has exactly one master, and it's the
- * lowest-preference stream registered" holds after every call - there is no
- * masterless-but-populated intermediate state. A handover captures the
- * departing master's position FIRST and hands it to the successor as the
- * reference time, so the session's clock survives its clock-carrier leaving.
+ * (register or unregister) re-runs the same election (`electMaster`) and then
+ * the same audio sweep (`applyAudio`), so two invariants hold after every
+ * public call:
+ *   1. a non-empty registry has exactly one master - the lowest-preference
+ *      stream registered - so there is no masterless-but-populated state, not
+ *      even for a hostile preference like NaN;
+ *   2. exactly one REGISTERED stream is unmuted, and it's that master. An
+ *      element that leaves engine control (unregistered, or displaced by a
+ *      swap under a stable id) is `retire()`d - silenced and stopped - since
+ *      the sweep can no longer reach it.
+ * A handover captures the departing master's position FIRST and hands it to
+ * the successor as the reference time, so the session's clock survives its
+ * clock-carrier leaving.
+ *
+ * SWITCHING RECORDINGS: the engine preserves the session position across an
+ * empty registry on purpose (a stream that unmounts and remounts must resume,
+ * not restart). So when the consumer moves to a DIFFERENT recording, it has to
+ * say so - call `seek(0)` on the emptied engine before registering the new
+ * recording's streams, or the first of them will resume at the previous
+ * recording's position. (Constructing a fresh SyncEngine works too, but a
+ * seek is the smaller, more obvious move and keeps any event wiring intact.)
  */
 export class SyncEngine {
   private readonly events: EngineEvents
@@ -102,38 +139,41 @@ export class SyncEngine {
   }
 
   register(id: string, video: VideoLike, preference: number): void {
-    // Capture the master's identity AND the session position BEFORE mutating
+    // Capture the displaced element AND the session position BEFORE mutating
     // the map. Both matter:
-    //  - If `id` re-registers the CURRENT master (a React ref re-firing, a
-    //    StrictMode double-invoke, or an element swap under a stable id),
-    //    `entries.set` below overwrites the entry first, so an election run
-    //    afterwards would see the newcomer sitting in the master's slot and
-    //    could mute the only audio-carrying video.
+    //  - `id` may already hold a DIFFERENT element (a React element swap under
+    //    a stable id, an <video> node replaced on remount). `entries.set`
+    //    below drops the engine's only handle on it, so if it isn't retired
+    //    here it keeps playing - unmuted, if it was the master - as a second
+    //    audio source nobody can reach any more.
     //  - The reference time has to come from the OUTGOING element (or from
     //    lastKnownTime when nothing is registered), because after `set` the
     //    map may point at a brand-new element sitting at 0.
-    const reRegisteringMaster = id === this.currentMasterId
+    const displaced = this.entries.get(id)?.video
     const reference = this.referenceTime()
 
     this.entries.set(id, { video, preference })
 
-    if (reRegisteringMaster) {
-      // Same id, still master: stay unmuted at the master volume. No
-      // election re-run and no onMasterChange re-fire - nothing changed.
-      // (Election would return this same id anyway: its insertion position,
-      // and therefore its tie-break rank, is unchanged by `set`.)
-      video.muted = false
-      video.volume = this.masterVolume
-    } else {
-      // One election rule for every registry mutation. The newcomer wins only
-      // by being strictly better than the incumbent (electMaster's tie-break
-      // keeps the earlier-registered one), and if the registry somehow had no
-      // valid master, the best EXISTING stream is elected rather than the
-      // newcomer winning by default just for arriving last.
-      const elected = electMaster(this.entries)
-      if (elected !== null && elected !== this.currentMasterId) this.promoteToMaster(elected)
-      if (id !== this.currentMasterId) video.muted = true
+    // Same object re-registered (a ref re-firing, a StrictMode double-invoke)
+    // is NOT a swap: retiring it would silence and stop the very element being
+    // registered.
+    if (displaced && displaced !== video) this.retire(displaced)
+
+    // One election rule for every registry mutation, run NOW rather than
+    // deferred to some later call: the newcomer wins only by being strictly
+    // better than the incumbent (electMaster's tie-break keeps the
+    // earlier-registered one), an id coming back with a WORSE preference hands
+    // over immediately, and a registry that somehow had no valid master elects
+    // its best EXISTING stream rather than letting the newcomer win by default
+    // just for arriving last. Re-registering the master under an unchanged
+    // preference re-elects the same id (Map.set preserves its insertion
+    // position), so the `!==` guard is also what keeps onMasterChange from
+    // re-firing when nothing actually changed.
+    const elected = electMaster(this.entries)
+    if (elected !== null && elected !== this.currentMasterId) {
+      this.promoteToMaster(elected, reference)
     }
+    this.applyAudio()
 
     // Align BEFORE it participates: a returning stream must land on the
     // session position (the master's clock, or the preserved position of a
@@ -175,15 +215,11 @@ export class SyncEngine {
 
     this.entries.delete(id)
     this.pausedForStall.delete(id)
+    this.retire(entry.video)
 
     if (wasMaster) {
       this.lastKnownTime = reference
       this.hasReference = true
-      // Mute the outgoing master on its way out. The caller normally tears the
-      // element down, but if it lingers (a hidden element, a delayed unmount)
-      // an unmuted leftover would play audio alongside the new master - the
-      // one thing the mute discipline exists to prevent.
-      entry.video.muted = true
 
       const elected = electMaster(this.entries)
       if (elected === null) {
@@ -195,21 +231,26 @@ export class SyncEngine {
         // Straight to the successor - deliberately NO intermediate
         // onMasterChange(null): from a consumer's point of view the audio
         // moved from one stream to another, it never went away.
-        this.promoteToMaster(elected)
+        this.promoteToMaster(elected, reference)
         const next = this.entries.get(elected)
-        if (next) {
-          this.alignToReference(next.video, reference)
-          // The master is the clock, so it has to actually run when intent is
-          // playing - even if this particular stream happened to be paused
-          // independently of intent (as a slave, that was harmless; as the
-          // master it would freeze drift correction for everyone). If a stall
-          // is really in force, the reconcile below pauses it right back and
-          // records it as owed a resume, exactly like any other video.
-          if (this.intentPlaying) safePlay(next.video)
-        }
+        // The master is the clock, so it has to actually run when intent is
+        // playing - even if this particular stream happened to be paused
+        // independently of intent (as a slave, that was harmless; as the
+        // master it would freeze drift correction for everyone). If a stall
+        // is really in force, the reconcile below pauses it right back and
+        // records it as owed a resume, exactly like any other video.
+        if (next && this.intentPlaying) safePlay(next.video)
       }
     }
 
+    // Deliberately redundant today: `retire()` above covers the element that
+    // left and `promoteToMaster()` sweeps when there's a successor, so every
+    // current path is already correct without this line. It stays because
+    // "every registry mutation ends with an audio sweep" is the rule that
+    // makes the invariant structural instead of a case analysis someone has to
+    // redo after each edit - the same reason pause() keeps its own explicit
+    // stall-clearing branch.
+    this.applyAudio()
     // Removing the buffering video can itself resolve a stall - and a fresh
     // master just changed who's playing, so re-derive the invariant either way.
     this.reconcileStall()
@@ -222,8 +263,11 @@ export class SyncEngine {
   get currentTime(): number {
     const master = this.currentMasterId ? this.entries.get(this.currentMasterId) : undefined
     if (master) {
+      // Cached so the getter keeps answering after the master leaves. NOTE: it
+      // deliberately does NOT set `hasReference` - a read must not change what
+      // the engine considers a real session position. unregister() and seek(),
+      // the two things that actually establish one, both set it themselves.
       this.lastKnownTime = master.video.currentTime
-      this.hasReference = true
       return master.video.currentTime
     }
     return this.lastKnownTime
@@ -253,6 +297,43 @@ export class SyncEngine {
     if (Math.abs(video.currentTime - reference) <= DRIFT_IGNORE_S) return
     video.currentTime = reference
     video.playbackRate = 1
+  }
+
+  /**
+   * Level-triggered AUDIO DISCIPLINE, and the single place any `muted` is
+   * written for a registered stream: exactly one registered video is unmuted -
+   * the master, at the engine volume - and every other one is muted. Like
+   * `reconcileStall()`, it re-derives the whole invariant from current state on
+   * every call instead of trusting a scattered set of assignments to each be
+   * individually right, so it's idempotent and safe to call after any registry
+   * mutation (and belt-and-braces double calls cost nothing).
+   *
+   * This exists because the invariant used to be spread across five assignment
+   * sites in three methods, and an element swap slipped between them: the
+   * incoming master element was unmuted while the displaced one stayed unmuted
+   * AND playing - two simultaneous audio sources. Elements LEAVING the registry
+   * (unregistered, or displaced by a swap) are out of the sweep's reach by
+   * definition, so `retire()` covers them explicitly.
+   */
+  private applyAudio(): void {
+    for (const [id, entry] of this.entries) {
+      const isMaster = id === this.currentMasterId
+      entry.video.muted = !isMaster
+      if (isMaster) entry.video.volume = this.masterVolume
+    }
+  }
+
+  /**
+   * Takes an element OUT of engine control: silenced and stopped. Used for a
+   * stream leaving the registry and for the element a swap displaced - in both
+   * cases the engine is about to lose its handle on it, so this is the last
+   * chance to make sure it can't keep playing audio (or burning bandwidth)
+   * behind the session's back. The caller owns it from here: it's free to
+   * destroy it, or to unmute/play it for its own purposes.
+   */
+  private retire(video: VideoLike): void {
+    video.muted = true
+    video.pause()
   }
 
   get playing(): boolean {
@@ -318,8 +399,9 @@ export class SyncEngine {
 
   setVolume(v: number): void {
     this.masterVolume = v
-    const master = this.currentMasterId ? this.entries.get(this.currentMasterId) : undefined
-    if (master) master.video.volume = v
+    // Through the same sweep as every other audio change - so "the volume
+    // lives on the master only" is stated once, not re-implemented here.
+    this.applyAudio()
   }
 
   tick(): void {
@@ -346,24 +428,26 @@ export class SyncEngine {
     }
   }
 
-  private promoteToMaster(id: string): void {
-    const previousId = this.currentMasterId
-    if (previousId !== null && previousId !== id) {
-      const previous = this.entries.get(previousId)
-      if (previous) previous.video.muted = true
-    }
-
+  /**
+   * Makes `id` the master and hands it the session clock. The OLD master isn't
+   * touched here at all - `applyAudio()` mutes whoever isn't master any more,
+   * and `retire()` handles one that's leaving the registry entirely.
+   */
+  private promoteToMaster(id: string, reference: number | null): void {
     this.currentMasterId = id
     const entry = this.entries.get(id)
     if (entry) {
-      entry.video.muted = false
-      entry.video.volume = this.masterVolume
       // A promoted slave may still carry a corrective CATCHUP/SLOWDOWN rate
       // from its time as a slave. The master is the clock and is never
       // rate-corrected, so nothing would ever bring that rate back to 1 - it
       // would silently run the whole session fast or slow.
       entry.video.playbackRate = 1
+      if (reference !== null) this.alignToReference(entry.video, reference)
     }
+    // Audio BEFORE the event: a consumer that inspects element state
+    // synchronously inside onMasterChange must see the finished mute/volume
+    // arrangement, not the half-applied one.
+    this.applyAudio()
     this.events.onMasterChange?.(id)
   }
 

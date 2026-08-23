@@ -22,12 +22,20 @@ class FakeVideo implements VideoLike {
   volume = 1
   paused = true
   readyState = 4 // HAVE_ENOUGH_DATA by default; tests drop this below 3 to simulate a stall
+  /**
+   * How often pause() was CALLED, not how often it changed anything. A real
+   * <video> fires a `pause` event and interrupts decoding on every call, so a
+   * redundant pause (immediately undone by a play()) is visible jank a
+   * paused-state assertion can't catch.
+   */
+  pauseCalls = 0
 
   play(): void {
     this.paused = false
   }
 
   pause(): void {
+    this.pauseCalls++
     this.paused = true
   }
 
@@ -716,6 +724,59 @@ describe('electMaster: election rule and tie-break', () => {
     )
     expect(elected).toBe('negative')
   })
+
+  it('(e) Infinity is just a very bad preference: a finite candidate beats it, either way round', () => {
+    expect(
+      electMaster(
+        new Map([
+          ['infinite', { preference: Number.POSITIVE_INFINITY }],
+          ['finite', { preference: 99 }],
+        ]),
+      ),
+    ).toBe('finite')
+    expect(
+      electMaster(
+        new Map([
+          ['finite', { preference: 99 }],
+          ['infinite', { preference: Number.POSITIVE_INFINITY }],
+        ]),
+      ),
+    ).toBe('finite')
+  })
+
+  it('(f) NaN sorts LAST: a comparable preference always beats it, whichever registered first', () => {
+    expect(
+      electMaster(
+        new Map([
+          ['broken', { preference: Number.NaN }],
+          ['usable', { preference: 7 }],
+        ]),
+      ),
+    ).toBe('usable')
+    expect(
+      electMaster(
+        new Map([
+          ['usable', { preference: 7 }],
+          ['broken', { preference: Number.NaN }],
+        ]),
+      ),
+    ).toBe('usable')
+  })
+
+  it('(g) a candidate is always elected when there is one at all - even if every preference is NaN', () => {
+    // The engine's invariant is "non-empty registry => exactly one master".
+    // An unusable preference must not be able to produce a masterless registry
+    // with no audio at all; NaN ties fall back to registration order.
+    expect(
+      electMaster(
+        new Map([
+          ['first', { preference: Number.NaN }],
+          ['second', { preference: Number.NaN }],
+        ]),
+      ),
+    ).toBe('first')
+    expect(electMaster(new Map([['lonely', { preference: Number.NaN }]]))).toBe('lonely')
+  })
 })
 
 describe('SyncEngine: dynamic streams - master handover, rejoin, teardown', () => {
@@ -755,6 +816,10 @@ describe('SyncEngine: dynamic streams - master handover, rejoin, teardown', () =
     expect(presentation.muted).toBe(false)
     expect(screen.muted).toBe(true)
     expect(Math.abs(presentation.currentTime - referenceTime)).toBeLessThanOrEqual(0.05)
+    // The CONSUMER's clock (what a scrubber/UI reads) is continuous too, not
+    // just the underlying element - the getter now reads a different element
+    // than it did a moment ago, which is exactly what must not be visible.
+    expect(Math.abs(engine.currentTime - referenceTime)).toBeLessThanOrEqual(0.05)
     expect(presentation.paused).toBe(false) // the new clock is running
     assertAudioDiscipline(engine, { presentation, screen })
   })
@@ -1007,19 +1072,26 @@ describe('SyncEngine: dynamic streams - master handover, rejoin, teardown', () =
   })
 
   it('(q) audio discipline and the "non-empty registry has a master" invariant hold across a full teardown chain', () => {
-    const { engine, presenter, presentation, screen } = mkThree()
+    const { engine, presenter, presentation, screen, onMasterChange } = mkThree()
     assertAudioDiscipline(engine, { presenter, presentation, screen })
 
     engine.unregister('presenter')
     expect(engine.masterId).toBe('presentation')
+    expect(onMasterChange.mock.calls).toEqual([['presentation']])
     assertAudioDiscipline(engine, { presentation, screen })
 
+    // The SECOND handover in a row: one event, the successor's id, still no
+    // intermediate null - the per-step call list is asserted cumulatively so a
+    // stray extra event anywhere in the chain shows up.
     engine.unregister('presentation')
     expect(engine.masterId).toBe('screen')
+    expect(onMasterChange.mock.calls).toEqual([['presentation'], ['screen']])
     assertAudioDiscipline(engine, { screen })
 
+    // Only the step that actually empties the registry reports null.
     engine.unregister('screen')
     expect(engine.masterId).toBeNull()
+    expect(onMasterChange.mock.calls).toEqual([['presentation'], ['screen'], [null]])
     assertAudioDiscipline(engine, {})
   })
 
@@ -1064,5 +1136,266 @@ describe('SyncEngine: dynamic streams - master handover, rejoin, teardown', () =
     expect(presentation.paused).toBe(false)
     expect(screen.paused).toBe(false)
     expect(onStall.mock.calls).toEqual([[true], [false]])
+  })
+})
+
+describe('SyncEngine: [review round 5] single-site audio discipline and hostile preferences', () => {
+  /**
+   * The strongest form of the audio invariant: across EVERY element the test
+   * has ever handed the engine - still registered, unregistered, or displaced
+   * by a swap - exactly one is unmuted, and it is the master's current
+   * element. Departed elements are included on purpose: that's the leftover
+   * double-audio hazard this round is about.
+   */
+  function expectSingleAudioSource(all: FakeVideo[], master: FakeVideo | null): void {
+    expect(all.filter((v) => !v.muted)).toEqual(master === null ? [] : [master])
+  }
+
+  it('(a) [I1] swapping the master ELEMENT under a stable id silences AND stops the displaced element', () => {
+    const onMasterChange = vi.fn()
+    const engine = new SyncEngine({ onMasterChange })
+    const first = new FakeVideo()
+    const presentation = new FakeVideo()
+    const screen = new FakeVideo()
+    engine.register('master', first, 0)
+    engine.register('presentation', presentation, 1)
+    engine.register('screen', screen, 2)
+    engine.play()
+    first.currentTime = 30
+    presentation.currentTime = 30
+    screen.currentTime = 30
+    expect(first.muted).toBe(false)
+    expect(first.paused).toBe(false)
+    onMasterChange.mockClear()
+
+    // A React element swap under the SAME id, with no unregister in between -
+    // a supported path (see registration test (h)).
+    const second = new FakeVideo()
+    engine.register('master', second, 0)
+
+    expect(engine.masterId).toBe('master')
+    expect(second.muted).toBe(false) // the incoming element carries the audio
+    expect(first.muted).toBe(true) // ...and the outgoing one must not, too
+    expect(first.paused).toBe(true) // nor keep decoding a stream nobody watches
+    expectSingleAudioSource([first, second, presentation, screen], second)
+    expect(second.currentTime).toBe(30) // still aligned to the session clock
+    expect(onMasterChange).not.toHaveBeenCalled() // same id, same role: nothing changed
+  })
+
+  it('(b) [I1] swapping a SLAVE element under a stable id also stops the displaced element', () => {
+    const engine = new SyncEngine()
+    const master = new FakeVideo()
+    const first = new FakeVideo()
+    engine.register('master', master, 0)
+    engine.register('slave', first, 1)
+    engine.play()
+    expect(first.paused).toBe(false)
+
+    const second = new FakeVideo()
+    engine.register('slave', second, 1)
+
+    expect(first.paused).toBe(true)
+    expect(first.muted).toBe(true)
+    expectSingleAudioSource([master, first, second], master)
+  })
+
+  it('(c) unregistering silences AND stops the departing element, master or slave', () => {
+    const engine = new SyncEngine()
+    const master = new FakeVideo()
+    const slave = new FakeVideo()
+    engine.register('master', master, 0)
+    engine.register('slave', slave, 1)
+    engine.play()
+
+    engine.unregister('slave')
+    expect(slave.paused).toBe(true)
+    expect(slave.muted).toBe(true)
+
+    engine.unregister('master')
+    expect(master.paused).toBe(true)
+    expect(master.muted).toBe(true)
+    expectSingleAudioSource([master, slave], null)
+  })
+
+  it('(c2) re-registering the SAME element is not a swap: it is never retired, so nothing churns', () => {
+    const engine = new SyncEngine()
+    const master = new FakeVideo()
+    const slave = new FakeVideo()
+    engine.register('master', master, 0)
+    engine.register('slave', slave, 1)
+    engine.play()
+    const masterPauses = master.pauseCalls
+    const slavePauses = slave.pauseCalls
+
+    // A ref re-firing / StrictMode double-invoke: same id, SAME object.
+    engine.register('master', master, 0)
+    engine.register('slave', slave, 1)
+
+    // Treating this as a swap would pause each element and then immediately
+    // play it again - on a real <video>, a pause/play event pair and a decode
+    // interruption per re-render, for no reason at all.
+    expect(master.pauseCalls).toBe(masterPauses)
+    expect(slave.pauseCalls).toBe(slavePauses)
+    expect(master.paused).toBe(false)
+    expect(slave.paused).toBe(false)
+    expectSingleAudioSource([master, slave], master)
+  })
+
+  it('(d) [I2] the audio sweep re-derives from current state: repeated registrations never drift out of discipline', () => {
+    const engine = new SyncEngine()
+    const presenter = new FakeVideo()
+    const presentation = new FakeVideo()
+    const screen = new FakeVideo()
+    engine.register('presenter', presenter, 0)
+    engine.register('presentation', presentation, 1)
+    engine.register('screen', screen, 2)
+
+    // Hammer the registry with re-registrations, in an order that keeps
+    // changing which entry was touched last.
+    for (let i = 0; i < 3; i++) {
+      engine.register('screen', screen, 2)
+      engine.register('presenter', presenter, 0)
+      engine.register('presentation', presentation, 1)
+      expectSingleAudioSource([presenter, presentation, screen], presenter)
+    }
+
+    // Something outside the engine mutes the master (a stray element write, a
+    // browser autoplay policy). The next registry mutation sweeps it back.
+    presenter.muted = true
+    engine.register('screen', screen, 2)
+    expectSingleAudioSource([presenter, presentation, screen], presenter)
+  })
+
+  it('(e) [I2 minor] re-registering the master with a WORSE preference hands over immediately', () => {
+    const onMasterChange = vi.fn()
+    const engine = new SyncEngine({ onMasterChange })
+    const presenter = new FakeVideo()
+    const presentation = new FakeVideo()
+    engine.register('presenter', presenter, 0)
+    engine.register('presentation', presentation, 1)
+    engine.play()
+    presenter.currentTime = 30
+    presentation.currentTime = 30
+    onMasterChange.mockClear()
+
+    // The same id comes back deprioritized (a layout change, a stream that
+    // lost its audio track). The election must run NOW, not be deferred to
+    // whatever unrelated call happens to mutate the registry next.
+    engine.register('presenter', presenter, 5)
+
+    expect(engine.masterId).toBe('presentation')
+    expect(onMasterChange.mock.calls).toEqual([['presentation']])
+    expectSingleAudioSource([presenter, presentation], presentation)
+    expect(Math.abs(presentation.currentTime - 30)).toBeLessThanOrEqual(0.05)
+  })
+
+  it('(f) [I2 minor] a NaN preference never produces a masterless, silent registry', () => {
+    const engine = new SyncEngine()
+    const broken = new FakeVideo()
+    // A caller passing through a bad computation (parseInt of a missing
+    // flavor, an undefined index) must not be able to silence the session.
+    engine.register('broken', broken, Number.NaN)
+
+    expect(engine.masterId).toBe('broken')
+    expectSingleAudioSource([broken], broken)
+
+    // A usable preference arriving later takes over, since NaN sorts last.
+    const usable = new FakeVideo()
+    engine.register('usable', usable, 3)
+
+    expect(engine.masterId).toBe('usable')
+    expectSingleAudioSource([broken, usable], usable)
+  })
+
+  it('(g) [I2 minor] a NaN preference never displaces a usable master, and never wins a handover from one', () => {
+    const engine = new SyncEngine()
+    const presenter = new FakeVideo()
+    const broken = new FakeVideo()
+    const screen = new FakeVideo()
+    engine.register('presenter', presenter, 0)
+    engine.register('broken', broken, Number.NaN)
+    engine.register('screen', screen, 2)
+    expect(engine.masterId).toBe('presenter')
+
+    engine.unregister('presenter')
+
+    expect(engine.masterId).toBe('screen') // the comparable preference wins
+    expectSingleAudioSource([presenter, broken, screen], screen)
+  })
+
+  it('(h) [P3] emptying the registry while stalled ends the stall instead of wedging it', () => {
+    const onStall = vi.fn()
+    const engine = new SyncEngine({ onStall })
+    const master = new FakeVideo()
+    engine.register('master', master, 0)
+    engine.play()
+    master.currentTime = 12
+    master.readyState = 1
+    engine.tick()
+    expect(onStall.mock.calls).toEqual([[true]])
+
+    engine.unregister('master') // the only stream, and it's the buffering one
+
+    expect(engine.masterId).toBeNull()
+    expect(onStall.mock.calls).toEqual([[true], [false]]) // nothing left to buffer
+    expect(engine.playing).toBe(true) // intent is untouched by a teardown
+    expect(engine.currentTime).toBe(12)
+
+    // And the engine is not wedged: a stream registering later plays.
+    const rejoin = new FakeVideo()
+    engine.register('master', rejoin, 0)
+    expect(rejoin.currentTime).toBe(12)
+    expect(rejoin.paused).toBe(false)
+    expect(onStall.mock.calls).toEqual([[true], [false]])
+  })
+
+  it('(i) onMasterChange fires AFTER the audio sweep: a consumer reading elements in the callback sees the finished state', () => {
+    const seen: Array<{ id: string | null; unmuted: string[] }> = []
+    const videos: Record<string, FakeVideo> = {}
+    const engine = new SyncEngine({
+      onMasterChange: (id) =>
+        seen.push({
+          id,
+          unmuted: Object.entries(videos)
+            .filter(([, v]) => !v.muted)
+            .map(([k]) => k),
+        }),
+    })
+    // Each element enters the record only as it's registered, so the snapshot
+    // above never reports an element the engine hasn't been given yet.
+    videos.presenter = new FakeVideo()
+    engine.register('presenter', videos.presenter, 0)
+    videos.presentation = new FakeVideo()
+    engine.register('presentation', videos.presentation, 1)
+    engine.play()
+
+    engine.unregister('presenter')
+
+    // Both events: at the moment the consumer is told who the master is, the
+    // mute/volume arrangement must already match that answer.
+    expect(seen).toEqual([
+      { id: 'presenter', unmuted: ['presenter'] },
+      { id: 'presentation', unmuted: ['presentation'] },
+    ])
+  })
+
+  it('(j) [minor] a recording swap is seek(0) on the emptied engine, not a stale-position rejoin', () => {
+    const engine = new SyncEngine()
+    const oldRecording = new FakeVideo()
+    engine.register('presenter', oldRecording, 0)
+    engine.play()
+    oldRecording.currentTime = 90
+    engine.unregister('presenter') // last stream of the old recording
+
+    // Without the seek, the next recording's first stream would resume at the
+    // previous recording's position (the documented behavior of a preserved
+    // reference) - which is right for a rejoin and wrong for a new recording.
+    engine.seek(0)
+
+    const newRecording = new FakeVideo()
+    engine.register('presenter', newRecording, 0)
+
+    expect(newRecording.currentTime).toBe(0)
+    expect(engine.currentTime).toBe(0)
   })
 })
