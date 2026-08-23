@@ -241,6 +241,118 @@ describe('createPlayerStore', () => {
     })
   })
 
+  describe('reportStreamError / reloadStream', () => {
+    it('records the error on that stream and pauses every stream (spec §9)', async () => {
+      const { client } = makeClient()
+      const store = makeStore(client)
+      await store.getState().openEpisode('ep-1')
+      store.getState().engine.play()
+      expect(store.getState().engine.playing).toBe(true)
+      const failed = store.getState().getElement('presentation')!
+
+      store.getState().reportStreamError('presentation', failed, 'Netzwerkfehler im Stream')
+
+      const streams = store.getState().streams
+      expect(streams.find((s) => s.flavorType === 'presentation')?.error).toBe('Netzwerkfehler im Stream')
+      // The healthy stream keeps no error of its own, but is stopped with the
+      // rest - and the engine's intent is cleared, so resuming needs a gesture.
+      expect(streams.find((s) => s.flavorType === 'presenter')?.error).toBeUndefined()
+      expect(store.getState().engine.playing).toBe(false)
+      expect(store.getState().getElement('presenter')?.paused).toBe(true)
+      expect(failed.paused).toBe(true)
+      // The stream is NOT unloaded: its window stays on screen for the tile.
+      expect(streams.find((s) => s.flavorType === 'presentation')?.open).toBe(true)
+      expect(document.querySelectorAll('video')).toHaveLength(2)
+    })
+
+    it('ignores a report from an element that is no longer the registered one', async () => {
+      const { client } = makeClient()
+      const store = makeStore(client)
+      await store.getState().openEpisode('ep-1')
+      const stale = store.getState().getElement('presentation')!
+      // Any rebuild of that stream's element: destroyStreamElement drops the
+      // src and calls load(), which can dispatch a late error event.
+      store.getState().reloadStream('presentation')
+      store.getState().engine.play()
+
+      store.getState().reportStreamError('presentation', stale, 'Netzwerkfehler im Stream')
+
+      expect(store.getState().streams.find((s) => s.flavorType === 'presentation')?.error).toBeUndefined()
+      expect(store.getState().engine.playing).toBe(true)
+    })
+
+    it('ignores a report for a closed or unknown stream', async () => {
+      const { client } = makeClient()
+      const store = makeStore(client)
+      await store.getState().openEpisode('ep-1')
+      const closed = store.getState().getElement('presentation')!
+      store.getState().closeStream('presentation')
+      store.getState().engine.play()
+
+      store.getState().reportStreamError('presentation', closed, 'Netzwerkfehler im Stream')
+      store.getState().reportStreamError('nope', closed, 'Netzwerkfehler im Stream')
+
+      expect(store.getState().streams.find((s) => s.flavorType === 'presentation')?.error).toBeUndefined()
+      expect(store.getState().engine.playing).toBe(true)
+    })
+
+    it('reloadStream replaces the element, clears the error, and re-registers at the original preference', async () => {
+      const { client } = makeClient()
+      const store = makeStore(client)
+      await store.getState().openEpisode('ep-1')
+      const failed = store.getState().getElement('presentation')!
+      store.getState().reportStreamError('presentation', failed, 'Netzwerkfehler im Stream')
+      const registerSpy = vi.spyOn(store.getState().engine, 'register')
+      const unregisterSpy = vi.spyOn(store.getState().engine, 'unregister')
+      const streamsBefore = store.getState().streams
+
+      store.getState().reloadStream('presentation')
+
+      expect(unregisterSpy).toHaveBeenCalledWith('presentation')
+      expect(registerSpy).toHaveBeenCalledTimes(1)
+      expect(registerSpy.mock.calls[0][0]).toBe('presentation')
+      expect(registerSpy.mock.calls[0][2]).toBe(1) // unchanged preference
+      const fresh = store.getState().getElement('presentation')
+      expect(fresh).toBeDefined()
+      expect(fresh).not.toBe(failed)
+      expect(fresh?.getAttribute('src')).toBe('https://example.org/presentation.mp4')
+      expect(document.body.contains(failed)).toBe(false)
+      expect(store.getState().streams.find((s) => s.flavorType === 'presentation')?.error).toBeUndefined()
+      // New array identity - that is what makes VideoWindows re-read getElement.
+      expect(store.getState().streams).not.toBe(streamsBefore)
+      // Still no autoplay: recovery waits for a user gesture.
+      expect(store.getState().engine.playing).toBe(false)
+      expect(document.querySelectorAll('video')).toHaveLength(2)
+    })
+
+    it('reloadStream is a no-op for a closed or unknown stream', async () => {
+      const { client } = makeClient()
+      const store = makeStore(client)
+      await store.getState().openEpisode('ep-1')
+      store.getState().closeStream('presentation')
+      const registerSpy = vi.spyOn(store.getState().engine, 'register')
+
+      store.getState().reloadStream('presentation')
+      store.getState().reloadStream('nope')
+
+      expect(registerSpy).not.toHaveBeenCalled()
+      expect(store.getState().getElement('presentation')).toBeUndefined()
+      expect(document.querySelectorAll('video')).toHaveLength(1)
+    })
+
+    it('an episode swap clears a stream error from the previous episode', async () => {
+      const { client } = makeClient()
+      const store = makeStore(client)
+      await store.getState().openEpisode('ep-1')
+      const failed = store.getState().getElement('presentation')!
+      store.getState().reportStreamError('presentation', failed, 'Netzwerkfehler im Stream')
+
+      await store.getState().openEpisode('ep-2')
+
+      expect(store.getState().streams.every((s) => s.error === undefined)).toBe(true)
+    })
+  })
+
   describe('toBrowse', () => {
     it('unregisters and destroys every stream and clears episode state', async () => {
       const { client } = makeClient()

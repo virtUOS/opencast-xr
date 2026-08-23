@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef } from 'react'
 import { useStore } from 'zustand'
+import { Container, Text } from '@react-three/uikit'
 import { VideoSurface, Window, useShellStore, useWindowState } from 'sphere-shell'
 import type { PlayerStoreApi } from '../player/store'
+import { describeMediaError } from '../player/mediaElements'
 import {
   VIDEO_ASPECT,
   streamWindowAction,
@@ -95,6 +97,89 @@ function useStreamWindowSync(store: PlayerStoreApi, flavorType: string): void {
 }
 
 /**
+ * Turns one stream element's fatal `error` event into the store's per-stream
+ * error state (spec §9: "Engine pausiert alle; betroffenes Fenster zeigt
+ * Fehlerkachel mit Neuladen").
+ *
+ * This layer, and not the store, is where the listener belongs: the store
+ * creates the elements but has no lifecycle hook to hang a DOM subscription
+ * off, while this component already re-renders precisely when the element for
+ * its flavor changes (see `VideoWindows`' doc comment on `getElement`), which
+ * is exactly the effect dependency needed.
+ *
+ * An element that is ALREADY in its error state when the effect runs is
+ * reported too: `error` is a one-shot event with no replay, and the request can
+ * fail between `createStreamElement` and this effect (a 404 answered from cache
+ * is enough), which would otherwise leave a window silently black forever.
+ * `reportStreamError` deduplicates by message, so re-reporting the same failure
+ * after a re-render is harmless.
+ */
+function useStreamErrorWatch(
+  store: PlayerStoreApi,
+  flavorType: string,
+  element: HTMLVideoElement | undefined,
+): void {
+  useEffect(() => {
+    if (!element) return
+    const report = () =>
+      store.getState().reportStreamError(flavorType, element, describeMediaError(element.error))
+    element.addEventListener('error', report)
+    if (element.error) report()
+    return () => element.removeEventListener('error', report)
+  }, [store, flavorType, element])
+}
+
+const ERROR_BG = '#3a2028'
+const ERROR_TEXT = '#ffd8de'
+const RELOAD_BG = '#542c38'
+const RELOAD_BG_HOVER = '#6a3a48'
+// „Neu laden" per the spec's own wording, in plain ASCII letters - see
+// LibraryWindow.tsx's BACK_LABEL for the missing-glyph defect that rules out
+// typographic punctuation in this uikit version's default font.
+const RELOAD_LABEL = 'Neu laden'
+
+/**
+ * What a video window shows instead of its picture once its stream has failed:
+ * the concrete cause plus one button that rebuilds the stream.
+ *
+ * Mirrors `LibraryWindow`'s `ErrorPanel` (same palette, same "cause + retry"
+ * shape) rather than sharing it, because that one is a full-width panel inside
+ * a scroll column while this one has to fill a 16:9 frame - and duplicating
+ * twelve lines of uikit layout is cheaper than a props-driven abstraction over
+ * two callers with different geometry.
+ */
+function StreamErrorTile({ message, onReload }: { message: string; onReload: () => void }) {
+  return (
+    <Container
+      flexGrow={1}
+      flexDirection="column"
+      alignItems="center"
+      justifyContent="center"
+      gap={10}
+      padding={12}
+      backgroundColor={ERROR_BG}
+    >
+      <Text fontSize={12} color={ERROR_TEXT}>{message}</Text>
+      <Container
+        paddingX={12}
+        paddingY={6}
+        borderRadius={6}
+        backgroundColor={RELOAD_BG}
+        // Always a plain object, never a conditional `undefined` - see
+        // ControlsWindow.tsx's doc comment on the uikit reconciler crash.
+        hover={{ backgroundColor: RELOAD_BG_HOVER }}
+        onClick={(e) => {
+          e.stopPropagation()
+          onReload()
+        }}
+      >
+        <Text fontSize={12} color={ERROR_TEXT}>{RELOAD_LABEL}</Text>
+      </Container>
+    </Container>
+  )
+}
+
+/**
  * One stream's video window.
  *
  * Rendered for EVERY stream, open or closed - not only the open ones. A closed
@@ -107,14 +192,16 @@ function useStreamWindowSync(store: PlayerStoreApi, flavorType: string): void {
  * `element` is passed in rather than read here: see `VideoWindows`.
  */
 function VideoWindow({
-  store, flavorType, index, element,
+  store, flavorType, index, element, error,
 }: {
   store: PlayerStoreApi
   flavorType: string
   index: number
   element: HTMLVideoElement | undefined
+  error: string | undefined
 }) {
   useStreamWindowSync(store, flavorType)
+  useStreamErrorWatch(store, flavorType, element)
   const placement = useMemo(() => videoWindowPlacement(index), [index])
 
   return (
@@ -132,10 +219,18 @@ function VideoWindow({
       // sees a restore at all).
       onClose={() => store.getState().closeStream(flavorType)}
     >
-      {/* No element while the stream is closed. VideoSurface never touches
+      {/* The error tile REPLACES the picture rather than overlaying it: a
+          failed element has no frames to show anyway, and the tile has to be
+          the thing that catches the pointer for its button.
+
+          No element while the stream is closed. VideoSurface never touches
           playback, so unmounting it (minimize, close) does not stop the video -
           it only drops the texture. */}
-      {element ? <VideoSurface src={element} /> : null}
+      {error != null ? (
+        <StreamErrorTile message={error} onReload={() => store.getState().reloadStream(flavorType)} />
+      ) : element ? (
+        <VideoSurface src={element} />
+      ) : null}
     </Window>
   )
 }
@@ -168,6 +263,7 @@ export function VideoWindows({ store }: { store: PlayerStoreApi }) {
           flavorType={stream.flavorType}
           index={index}
           element={stream.open ? store.getState().getElement(stream.flavorType) : undefined}
+          error={stream.error}
         />
       ))}
     </>

@@ -50,3 +50,51 @@ export function destroyStreamElement(v: HTMLVideoElement): void {
   v.load()
   v.remove()
 }
+
+/**
+ * How much of `MediaError.message` the returned line is allowed to carry.
+ *
+ * Chrome's messages can be long and internal
+ * ("DEMUXER_ERROR_COULD_NOT_OPEN: FFmpegDemuxer: open context failed"), and
+ * this string is rendered by a uikit `<Text>` inside a video window - where
+ * @react-three/uikit 1.0.74's many-wrapped-lines defect makes a paragraph a
+ * rendering risk (see docs/UIKIT-NOTES.md). Capping keeps the tile to one or
+ * two short lines while still naming the concrete cause, which is the whole
+ * point of showing it: inside a headset there is no console to read.
+ */
+const ERROR_DETAIL_MAX_CHARS = 44
+
+/**
+ * One short German line naming what a stream element's `error` event actually
+ * was - the text of the spec §9 error tile.
+ *
+ * `code` is the only machine-readable part of a `MediaError` (`message` is
+ * implementation-defined and empty in some browsers), so it drives the
+ * wording; the message is appended, capped, when there is one. Numeric
+ * literals rather than the `MediaError.MEDIA_ERR_*` constants because those
+ * live on a DOM interface object that need not exist in every test
+ * environment, while the code values are fixed by the HTML spec.
+ *
+ * `null`/`undefined` is a real case, not just defensiveness: an `error` event
+ * whose `element.error` has already been cleared (a `load()` racing the
+ * dispatch) still has to produce a sentence.
+ */
+export function describeMediaError(err: MediaError | null | undefined): string {
+  const raw = err?.message ?? ''
+  const detail =
+    raw.length === 0
+      ? ''
+      : ` (${raw.length > ERROR_DETAIL_MAX_CHARS ? `${raw.slice(0, ERROR_DETAIL_MAX_CHARS - 3)}...` : raw})`
+  switch (err?.code) {
+    case 1: // MEDIA_ERR_ABORTED
+      return `Laden abgebrochen${detail}`
+    case 2: // MEDIA_ERR_NETWORK
+      return `Netzwerkfehler im Stream${detail}`
+    case 3: // MEDIA_ERR_DECODE
+      return `Stream nicht dekodierbar${detail}`
+    case 4: // MEDIA_ERR_SRC_NOT_SUPPORTED
+      return `Stream nicht erreichbar oder nicht unterstützt${detail}`
+    default:
+      return `Unbekannter Stream-Fehler${detail}`
+  }
+}

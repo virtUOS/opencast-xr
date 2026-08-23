@@ -12,6 +12,17 @@ export interface StreamState {
   flavorType: string
   url: string
   open: boolean
+  /**
+   * Set when this stream's element fired a fatal `error` event (spec §9), as
+   * the short human line the window's error tile shows. Cleared by
+   * `reloadStream` and by any rebuild of `streams` (an episode swap, browse).
+   *
+   * Deliberately NOT a reason to flip `open`: the stream is still loaded as far
+   * as the shell is concerned, its window stays on screen (showing the tile
+   * instead of the picture), and nothing about the shell/store agreement that
+   * `windows/videoWindowState.ts` reconciles changes.
+   */
+  error?: string
 }
 
 export interface PlayerStore {
@@ -61,6 +72,39 @@ export interface PlayerStore {
    * still closed in the shell gets undone the same way, in reverse.
    */
   reopenStream(flavorType: string): void
+  /**
+   * Spec §9's "Stream-Fehler während der Wiedergabe": records a fatal media
+   * error for one stream and **pauses everything**.
+   *
+   * Pausing the whole wall rather than just the failed stream is the spec's
+   * choice and the right one: the others would otherwise run on while one
+   * window is a static error tile, so the user's next resume would start from a
+   * position that no longer matches what they last saw playing together. It
+   * also clears the engine's play intent, so recovery needs a fresh user
+   * gesture - the same discipline `openEpisode`/`toBrowse` keep.
+   *
+   * `element` is the element the error was observed on, and is checked against
+   * the one currently registered for `flavorType`: `destroyStreamElement`
+   * (close, reload, episode swap) drops the `src` and calls `load()`, and a
+   * late/spurious `error` event from an element that has since been replaced
+   * must not paint an error tile over its healthy successor. The store is where
+   * that check belongs because the store is what owns the elements.
+   */
+  reportStreamError(flavorType: string, element: HTMLVideoElement, message: string): void
+  /**
+   * The error tile's „Neu laden": throws the stream's element away and builds a
+   * fresh one at the same URL and the same engine preference, clearing `error`.
+   *
+   * A full rebuild rather than a `load()` on the failed element: an element in
+   * its error state is not reliably recoverable in place, and a new element also
+   * makes the request from scratch (no stale, poisoned buffer). The engine's
+   * ordinary rejoin handling then aligns it to the session clock, exactly as it
+   * does for `reopenStream`.
+   *
+   * A no-op for an unknown or CLOSED stream - a closed stream has no element to
+   * replace, and `reopenStream` is that path.
+   */
+  reloadStream(flavorType: string): void
   toBrowse(): void
   setSubtitles(on: boolean): void
   setSeekPreview(s: number | null): void
@@ -244,6 +288,46 @@ export function createPlayerStore(client: OpencastClient) {
 
         set((state) => ({
           streams: state.streams.map((s) => (s.flavorType === flavorType ? { ...s, open: true } : s)),
+        }))
+      },
+
+      reportStreamError(flavorType, element, message) {
+        const target = get().streams.find((s) => s.flavorType === flavorType)
+        if (!target?.open) return // closed or unknown: no window to show a tile in
+        // Stale element - see the interface doc comment. Its stream has already
+        // been rebuilt (or unloaded) since the error happened.
+        if (elementsByFlavor.get(flavorType) !== element) return
+        if (target.error === message) return // already showing exactly this
+        get().engine.pause()
+        set((state) => ({
+          streams: state.streams.map((s) => (s.flavorType === flavorType ? { ...s, error: message } : s)),
+        }))
+      },
+
+      reloadStream(flavorType) {
+        const { streams, engine } = get()
+        const index = streams.findIndex((s) => s.flavorType === flavorType)
+        const target = streams[index]
+        if (!target?.open) return
+
+        engine.unregister(flavorType)
+        const previous = elementsByFlavor.get(flavorType)
+        if (previous) destroyStreamElement(previous)
+        const el = createStreamElement(target.url)
+        elementsByFlavor.set(flavorType, el)
+        // Same preference as originally (its index in `streams`), for the same
+        // reason reopenStream keeps it: a reload must not reshuffle who the
+        // engine prefers as master.
+        engine.register(flavorType, el, index)
+
+        // A NEW array even when nothing but `error` changed: `VideoWindows`
+        // subscribes to `streams` and re-reads the non-reactive `getElement`
+        // on every render it causes, so this identity change is what makes the
+        // window pick up the replacement element at all.
+        set((state) => ({
+          streams: state.streams.map((s) =>
+            s.flavorType === flavorType ? { ...s, error: undefined } : s,
+          ),
         }))
       },
 

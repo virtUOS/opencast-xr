@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createStreamElement, destroyStreamElement } from './mediaElements'
+import { createStreamElement, describeMediaError, destroyStreamElement } from './mediaElements'
 
 describe('createStreamElement', () => {
   it('creates a video element wired for silent background playback of the given url', () => {
@@ -53,5 +53,40 @@ describe('destroyStreamElement', () => {
 
     expect(() => destroyStreamElement(v)).not.toThrow()
     expect(v.hasAttribute('src')).toBe(false)
+  })
+})
+
+describe('describeMediaError', () => {
+  // A plain object, not a real MediaError: constructing one is not possible
+  // from script, and only `code`/`message` are read.
+  const err = (code: number, message = ''): MediaError => ({ code, message }) as MediaError
+
+  it('names the cause per MediaError code', () => {
+    expect(describeMediaError(err(1))).toBe('Laden abgebrochen')
+    expect(describeMediaError(err(2))).toBe('Netzwerkfehler im Stream')
+    expect(describeMediaError(err(3))).toBe('Stream nicht dekodierbar')
+    expect(describeMediaError(err(4))).toBe('Stream nicht erreichbar oder nicht unterstützt')
+  })
+
+  it('falls back to a sentence for a missing or unknown error', () => {
+    expect(describeMediaError(null)).toBe('Unbekannter Stream-Fehler')
+    expect(describeMediaError(undefined)).toBe('Unbekannter Stream-Fehler')
+    expect(describeMediaError(err(99))).toBe('Unbekannter Stream-Fehler')
+  })
+
+  it("appends the browser's own message when there is one", () => {
+    expect(describeMediaError(err(2, 'NETWORK_ERROR'))).toBe('Netzwerkfehler im Stream (NETWORK_ERROR)')
+  })
+
+  it('truncates a long message so the error tile stays one short line', () => {
+    // Long, internal-looking messages are what Chrome actually produces here.
+    const line = describeMediaError(err(4, 'DEMUXER_ERROR_COULD_NOT_OPEN: FFmpegDemuxer: open context failed'))
+
+    expect(line).toContain('DEMUXER_ERROR_COULD_NOT_OPEN')
+    expect(line.endsWith('...)')).toBe(true)
+    // The parenthesised detail is capped (44 chars incl. the "..."), so the
+    // whole line stays inside what a video window can render on one or two
+    // lines - see ERROR_DETAIL_MAX_CHARS' doc comment.
+    expect(line.length).toBeLessThanOrEqual('Stream nicht erreichbar oder nicht unterstützt'.length + 3 + 44)
   })
 })
