@@ -66,6 +66,17 @@ function makeClient(): LibraryClient & {
   }
 }
 
+/** A promise plus externally-callable resolve/reject, for interleaving two in-flight fetches by hand in a test. */
+function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void; reject: (e: unknown) => void } {
+  let resolve!: (v: T) => void
+  let reject!: (e: unknown) => void
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  return { promise, resolve, reject }
+}
+
 describe('formatDuration', () => {
   it('formats sub-minute durations as 0:MM:SS', () => {
     expect(formatDuration(5_000)).toBe('0:00:05')
@@ -257,5 +268,91 @@ describe('createLibraryState', () => {
     // resurrection of the episodes-level error.
     await store.getState().retry()
     expect(store.getState().level).toEqual({ kind: 'series' })
+  })
+
+  // Code review findings I1(A)/(B): two concurrency bugs in the pagination/
+  // fetch path, neither exercised by the sequential tests above.
+  describe('concurrency (code review I1)', () => {
+    it('scenario A: a second "Mehr laden" click while the first page is still in flight is ignored - no duplicate tiles, no corrupted offset/total', async () => {
+      const client = makeClient()
+      client.listEpisodes.mockResolvedValueOnce({ episodes: [makeEpisode({ id: 'e1' })], total: 5 })
+      const store = createLibraryState(client)
+      await store.getState().enterSeries('s1', 'Series One')
+
+      const page2 = deferred<{ episodes: Episode[]; total: number }>()
+      client.listEpisodes.mockReturnValueOnce(page2.promise)
+
+      // Two rapid clicks, both fired before the first page's fetch resolves.
+      const call1 = store.getState().loadMoreEpisodes()
+      const call2 = store.getState().loadMoreEpisodes()
+
+      // The guard is synchronous (checks episodesLoading before ever calling
+      // the client), so the second click must never reach listEpisodes at
+      // all - only 2 calls total exist: enterSeries's own, plus ONE loadMore.
+      expect(client.listEpisodes).toHaveBeenCalledTimes(2)
+      expect(store.getState().episodesLoading).toBe(true)
+
+      page2.resolve({ episodes: [makeEpisode({ id: 'e2' })], total: 5 })
+      await call1
+      await call2
+
+      expect(client.listEpisodes).toHaveBeenCalledTimes(2) // still just 2 - call2 never issued a request
+      expect(store.getState().episodes.map((e) => e.id)).toEqual(['e1', 'e2']) // appended exactly once, no duplicate
+      expect(store.getState().episodesOffset).toBe(2)
+      expect(store.getState().episodesTotal).toBe(5)
+      expect(store.getState().episodesHasMore).toBe(true) // 2 < 5
+      expect(store.getState().episodesLoading).toBe(false)
+    })
+
+    it('scenario B: a slow series-A fetch resolving AFTER switching to series B does not overwrite B\'s state', async () => {
+      const client = makeClient()
+      const store = createLibraryState(client)
+
+      const seriesA = deferred<{ episodes: Episode[]; total: number }>()
+      client.listEpisodes.mockReturnValueOnce(seriesA.promise)
+      const enterA = store.getState().enterSeries('a', 'Series A') // starts, awaiting seriesA.promise
+
+      // Switch to series B before A's fetch resolves.
+      client.listEpisodes.mockResolvedValueOnce({ episodes: [makeEpisode({ id: 'b1' })], total: 1 })
+      await store.getState().enterSeries('b', 'Series B')
+
+      expect(store.getState().level).toEqual({
+        kind: 'episodes',
+        scope: { type: 'series', sid: 'b', title: 'Series B' },
+      })
+      expect(store.getState().episodes.map((e) => e.id)).toEqual(['b1'])
+
+      // NOW A's stale fetch resolves - it must be discarded, not applied on
+      // top of B's already-loaded state.
+      seriesA.resolve({ episodes: [makeEpisode({ id: 'a1' })], total: 1 })
+      await enterA
+
+      expect(store.getState().level).toEqual({
+        kind: 'episodes',
+        scope: { type: 'series', sid: 'b', title: 'Series B' },
+      })
+      expect(store.getState().episodes.map((e) => e.id)).toEqual(['b1']) // NOT ['a1'] or ['b1','a1']
+      expect(store.getState().episodesError).toBeNull()
+      expect(store.getState().episodesLoading).toBe(false)
+    })
+
+    it('scenario B, failure path: a slow series-A fetch REJECTING after switching to series B does not paint an error over B', async () => {
+      const client = makeClient()
+      const store = createLibraryState(client)
+
+      const seriesA = deferred<{ episodes: Episode[]; total: number }>()
+      client.listEpisodes.mockReturnValueOnce(seriesA.promise)
+      const enterA = store.getState().enterSeries('a', 'Series A')
+
+      client.listEpisodes.mockResolvedValueOnce({ episodes: [makeEpisode({ id: 'b1' })], total: 1 })
+      await store.getState().enterSeries('b', 'Series B')
+
+      seriesA.reject(new Error('A blew up'))
+      await enterA // the rejection is caught inside runEpisodesFetch - enterA itself must not throw
+
+      expect(store.getState().episodesError).toBeNull()
+      expect(store.getState().episodes.map((e) => e.id)).toEqual(['b1'])
+      expect(store.getState().episodesLoading).toBe(false)
+    })
   })
 })

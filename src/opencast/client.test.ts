@@ -178,6 +178,37 @@ describe('OpencastClient', () => {
     })
   })
 
+  describe('constructor default fetchFn (regression)', () => {
+    it('does not throw "Illegal invocation" with no fetchFn override - fetch must be BOUND, not passed bare', async () => {
+      // jsdom's own fetch (used by every other test in this file, via the
+      // fetchFn override) doesn't brand-check its receiver, so it can't
+      // catch a regression here - that's exactly how this bug shipped
+      // originally (see client.ts's doc comment on the constructor). This
+      // test simulates real Chrome's check by hand: a stub that throws
+      // unless invoked with `this === globalThis`, installed as the global
+      // `fetch` and exercised through the constructor's OWN default
+      // (`opts.fetchFn ?? fetch.bind(globalThis)`) - no fetchFn passed here.
+      const realFetch = globalThis.fetch
+      const receiverCheckedFetch = function (this: unknown): Promise<Response> {
+        if (this !== globalThis) {
+          return Promise.reject(
+            new TypeError("Failed to execute 'fetch' on 'Window': Illegal invocation"),
+          )
+        }
+        return Promise.resolve(jsonResponse(seriesListFixture))
+      }
+      globalThis.fetch = receiverCheckedFetch as unknown as typeof fetch
+
+      try {
+        const client = new OpencastClient() // no fetchFn override - exercises the real default
+        const series = await client.listSeries()
+        expect(series.length).toBeGreaterThan(0)
+      } finally {
+        globalThis.fetch = realFetch
+      }
+    })
+  })
+
   describe('loadCaptions', () => {
     it('finds the captions track, fetches its VTT through fetchFn, and returns parsed cues', async () => {
       const [episode] = parseEpisodeResponse(captionsEpisodeFixture)

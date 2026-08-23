@@ -148,13 +148,35 @@ export function createLibraryState(client: LibraryClient) {
     // built, not re-derived from state.
     let lastFailedAction: (() => Promise<void>) | null = null
 
-    async function fetchEpisodesPage(scope: EpisodeScope, reset: boolean): Promise<void> {
+    // Bumped by enterSeries/enterSingles/back - i.e. every genuine scope
+    // change. NOT bumped by loadMoreEpisodes (continues the SAME scope's
+    // next page - see its own dedicated guard below) or by retry() (which
+    // continues whatever scope its stored action closure already belongs
+    // to). A fetch captures the generation in force when it STARTS and
+    // checks it again when it resolves (or rejects), discarding its result
+    // entirely if the generation has since moved on. This is what stops a
+    // slow series-A fetch from landing on top of series-B's state after the
+    // user has already switched (code review finding I1, scenario B).
+    //
+    // Deliberately NOT used to BLOCK a switch while a previous fetch is
+    // still in flight: a user can always abandon a slow request and
+    // navigate elsewhere rather than being stuck waiting for it - the
+    // generation check is what makes that safe, not a guard that would
+    // prevent it.
+    let episodesGeneration = 0
+
+    async function fetchEpisodesPage(scope: EpisodeScope, reset: boolean, gen: number): Promise<void> {
       const offset = reset ? 0 : get().episodesOffset
       const params =
         scope.type === 'series'
           ? { sid: scope.sid, limit: PAGE_SIZE, offset }
           : { limit: PAGE_SIZE, offset }
       const { episodes: page, total } = await get().client.listEpisodes(params)
+      // Stale: a newer scope has taken over since this fetch started - see
+      // episodesGeneration's doc. Applying this result now would silently
+      // overwrite whatever the current generation's own fetch has already
+      // written, or is still in the middle of writing.
+      if (gen !== episodesGeneration) return
       const matched = scope.type === 'series' ? page : page.filter((e) => e.seriesId === undefined)
       const nextOffset = offset + page.length
       set((state) => ({
@@ -167,13 +189,17 @@ export function createLibraryState(client: LibraryClient) {
       }))
     }
 
-    async function runEpisodesFetch(action: () => Promise<void>): Promise<void> {
-      const attempt = () => runEpisodesFetch(action)
+    async function runEpisodesFetch(action: () => Promise<void>, gen: number): Promise<void> {
+      const attempt = () => runEpisodesFetch(action, gen)
       set({ episodesLoading: true, episodesError: null })
       try {
         await action()
+        if (gen !== episodesGeneration) return // stale - see fetchEpisodesPage's doc
         lastFailedAction = null
       } catch (err) {
+        // Stale rejection: don't paint an error banner over a scope the
+        // user has since navigated away from.
+        if (gen !== episodesGeneration) return
         set({ episodesLoading: false, episodesError: errorMessage(err) })
         lastFailedAction = attempt
       }
@@ -211,6 +237,12 @@ export function createLibraryState(client: LibraryClient) {
 
       async enterSeries(sid, title) {
         const scope: EpisodeScope = { type: 'series', sid, title }
+        // Drop a stale episodes-retry action too: it belongs to the scope
+        // being left, and re-running it after switching would silently
+        // refill state for a scope the user is no longer looking at.
+        lastFailedAction = null
+        episodesGeneration += 1
+        const gen = episodesGeneration
         set({
           level: { kind: 'episodes', scope },
           episodes: [],
@@ -218,11 +250,14 @@ export function createLibraryState(client: LibraryClient) {
           episodesTotal: 0,
           episodesHasMore: false,
         })
-        await runEpisodesFetch(() => fetchEpisodesPage(scope, true))
+        await runEpisodesFetch(() => fetchEpisodesPage(scope, true, gen), gen)
       },
 
       async enterSingles() {
         const scope: EpisodeScope = { type: 'singles' }
+        lastFailedAction = null
+        episodesGeneration += 1
+        const gen = episodesGeneration
         set({
           level: { kind: 'episodes', scope },
           episodes: [],
@@ -230,13 +265,21 @@ export function createLibraryState(client: LibraryClient) {
           episodesTotal: 0,
           episodesHasMore: false,
         })
-        await runEpisodesFetch(() => fetchEpisodesPage(scope, true))
+        await runEpisodesFetch(() => fetchEpisodesPage(scope, true, gen), gen)
       },
 
       async loadMoreEpisodes() {
-        const { level } = get()
+        const { level, episodesLoading } = get()
         if (level.kind !== 'episodes') return
-        await runEpisodesFetch(() => fetchEpisodesPage(level.scope, false))
+        // Ignore a second "Mehr laden" while the first page is still in
+        // flight (code review finding I1, scenario A) - without this, two
+        // concurrent fetches would both read the same stale offset, both
+        // append (duplicate tiles), and whichever resolves last would
+        // silently overwrite offset/total/hasMore computed from that same
+        // stale offset. Same scope for the whole call, so no generation
+        // bump - this is a same-generation guard, not a staleness check.
+        if (episodesLoading) return
+        await runEpisodesFetch(() => fetchEpisodesPage(level.scope, false, episodesGeneration), episodesGeneration)
       },
 
       async retry() {
@@ -244,10 +287,11 @@ export function createLibraryState(client: LibraryClient) {
       },
 
       back() {
-        // Drop a stale episodes-retry action too: it belongs to the scope
-        // being left, and re-running it after navigating back would silently
-        // refill state for a level the user is no longer looking at.
+        // Drop a stale episodes-retry action too, and bump the generation
+        // so a fetch still in flight for the scope being left can't land on
+        // the series level's state either - see episodesGeneration's doc.
         lastFailedAction = null
+        episodesGeneration += 1
         set({
           level: { kind: 'series' },
           episodes: [],

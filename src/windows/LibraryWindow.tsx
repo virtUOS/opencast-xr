@@ -85,6 +85,11 @@ export function LibraryWindow({ store }: { store: PlayerStoreApi }) {
 
   const selectSeriesLevelTile = useCallback(
     (id: string) => {
+      // Clear a stale "couldn't open episode" banner from whatever scope
+      // was showing before - it belongs to that scope, not this one, and
+      // without this it would otherwise persist across navigation (code
+      // review minor finding: stale openError banner).
+      setOpenError(null)
       if (id === SINGLES_TILE_ID) {
         void libraryStore.getState().enterSingles()
         return
@@ -127,6 +132,7 @@ export function LibraryWindow({ store }: { store: PlayerStoreApi }) {
               hover={{ backgroundColor: '#20202a' }}
               onClick={(e) => {
                 e.stopPropagation()
+                setOpenError(null) // see selectSeriesLevelTile's comment - same stale-banner fix
                 libraryStore.getState().back()
               }}
             >
@@ -158,7 +164,16 @@ export function LibraryWindow({ store }: { store: PlayerStoreApi }) {
               <MediaList
                 items={episodeItems}
                 onSelect={selectEpisodeTile}
-                onMore={episodesHasMore ? () => void libraryStore.getState().loadMoreEpisodes() : undefined}
+                // Omitted (not just guarded) while a page is already loading
+                // - the tile disappears rather than staying clickable-but-
+                // inert, so there's nothing on screen inviting the double-
+                // click the state layer's own loadMoreEpisodes guard already
+                // has to defend against (code review finding I1, scenario A).
+                onMore={
+                  episodesHasMore && !episodesLoading
+                    ? () => void libraryStore.getState().loadMoreEpisodes()
+                    : undefined
+                }
                 moreLabel="Mehr laden"
                 emptyText="Keine Aufzeichnungen."
               />
