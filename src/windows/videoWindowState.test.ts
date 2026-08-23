@@ -6,6 +6,7 @@ import {
   SIDE_ROW_GAP_DEG,
   SIDE_WIDTH_DEG,
   VIDEO_ASPECT,
+  streamErrorEscapeHint,
   streamWindowAction,
   videoWindowId,
   videoWindowPlacement,
@@ -16,6 +17,29 @@ describe('videoWindowId', () => {
   it('is `video-` + flavorType', () => {
     expect(videoWindowId('presenter')).toBe('video-presenter')
     expect(videoWindowId('presentation')).toBe('video-presentation')
+  })
+})
+
+describe('streamErrorEscapeHint', () => {
+  it('names the way out for the last open stream, whose window cannot be closed', () => {
+    const hint = streamErrorEscapeHint(false)
+    expect(hint).not.toBeNull()
+    // The escape has to be NAMED, not implied: with the X vetoed and the
+    // reload button re-failing against the same URL, "Bibliothek" is the only
+    // control that gets the user out of a permanently dead single-stream
+    // episode.
+    expect(hint).toContain('Bibliothek')
+  })
+
+  it('says nothing when another stream is still up', () => {
+    // The X works and the rest of the wall keeps playing - no dead end to explain.
+    expect(streamErrorEscapeHint(true)).toBeNull()
+  })
+
+  it('sticks to glyphs uikit 1.0.74 default font can draw', () => {
+    // Same constraint as LibraryWindow's BACK_LABEL: diacritics render, but
+    // typographic punctuation comes out as tofu boxes.
+    expect(streamErrorEscapeHint(false)).not.toMatch(/[‹›„“”…·—]/)
   })
 })
 

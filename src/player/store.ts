@@ -21,6 +21,11 @@ export interface StreamState {
    * as the shell is concerned, its window stays on screen (showing the tile
    * instead of the picture), and nothing about the shell/store agreement that
    * `windows/videoWindowState.ts` reconciles changes.
+   *
+   * It IS, however, a reason to leave the sync engine - a dead element never
+   * gets past `readyState` 0 and would stall every healthy stream forever. So
+   * `open: true` with an `error` set means exactly "loaded, on screen, and no
+   * longer a member of the playback session"; see `reportStreamError`.
    */
   error?: string
 }
@@ -40,7 +45,29 @@ export interface PlayerStore {
   /** Non-null while the timeline is being dragged (HUD feedback only - does not move playback). */
   seekPreviewS: number | null
   stalled: boolean
+  /**
+   * The engine's play INTENT as reactive state - the value a transport control
+   * renders its Play/Pause icon from (`derivePlaybackVisualState`).
+   *
+   * `SyncEngine.playing` is a plain getter, so a component cannot subscribe to
+   * it; the dock's transport used to mirror intent in its own `useState`
+   * instead, seeded from the engine and reset on an episode change. That worked
+   * only as long as the component's own click was the ONLY thing that changed
+   * intent while it was mounted, and it stopped being true the moment
+   * `reportStreamError` started pausing the engine: the engine was paused, the
+   * button still showed Pause, and its next click called `pause()` again - a
+   * silent no-op the user had to click twice through. Every writer of intent
+   * now goes through `setPlaying`, so there is no second copy to go stale.
+   */
+  playing: boolean
   openEpisode(id: string): Promise<void>
+  /**
+   * The ONLY way to change play intent. Drives `engine.play()`/`engine.pause()`
+   * and mirrors the result into `playing` in the same synchronous block, so the
+   * two can never disagree. Every store-side pause (`openEpisode`, `toBrowse`,
+   * `reportStreamError`, `dispose`) goes through it as well.
+   */
+  setPlaying(next: boolean): void
   /**
    * Unloads one stream: unregisters it from the engine and destroys its
    * element. Refuses to close the last open stream (see `canClose`).
@@ -74,7 +101,8 @@ export interface PlayerStore {
   reopenStream(flavorType: string): void
   /**
    * Spec §9's "Stream-Fehler während der Wiedergabe": records a fatal media
-   * error for one stream and **pauses everything**.
+   * error for one stream, **pauses everything**, and takes the failed stream
+   * OUT of the engine.
    *
    * Pausing the whole wall rather than just the failed stream is the spec's
    * choice and the right one: the others would otherwise run on while one
@@ -82,6 +110,30 @@ export interface PlayerStore {
    * position that no longer matches what they last saw playing together. It
    * also clears the engine's play intent, so recovery needs a fresh user
    * gesture - the same discipline `openEpisode`/`toBrowse` keep.
+   *
+   * ## Why the failed stream must LEAVE the engine (final-review I1)
+   *
+   * `SyncEngine.reconcileStall` treats every registered element with
+   * `readyState < 3` as "still buffering" - which is exactly right for a stream
+   * that is slow, and exactly wrong for one that is dead. A 404, an ACL
+   * rejection or a decode failure leaves the element stuck at `readyState` 0
+   * FOREVER, so a stream left registered after its fatal error wedges the whole
+   * wall: every later `play()` re-enters the stall on the same frame, every
+   * healthy stream is paused right back, `stalled` latches true, and the dock
+   * shows a permanent spinner. Nothing recovers it - „Neu laden" re-fails
+   * against the same URL, and for the single-flavor episodes that make up
+   * essentially the whole real corpus the last-stream veto (`canClose`) refuses
+   * to close the window too, so the only way out was „Bibliothek".
+   *
+   * Unregistering solves it at the source: the dead stream stops being a member
+   * whose readiness anyone waits for. Everything else about it is deliberately
+   * left alone - `open` stays `true` and its element stays alive, so its window
+   * (and the error tile in it) stay exactly where they were, and
+   * `reloadStream`/`reopenStream` re-register it at its original preference when
+   * the user asks. The engine handles both departures it can cause: an errored
+   * MASTER hands the session clock to the next-best stream (Task 7's handover),
+   * and an errored LAST stream leaves the registry empty with the position
+   * preserved, where `play()` is a harmless no-op.
    *
    * `element` is the element the error was observed on, and is checked against
    * the one currently registered for `flavorType`: `destroyStreamElement`
@@ -189,6 +241,7 @@ export function createPlayerStore(client: OpencastClient) {
       currentTimeS: 0,
       seekPreviewS: null,
       stalled: false,
+      playing: false,
 
       async openEpisode(id) {
         // Idempotent: re-opening the episode that's already showing (a
@@ -207,8 +260,9 @@ export function createPlayerStore(client: OpencastClient) {
         const cues = await get().client.loadCaptions(episode)
         const sources = selectStreams(episode.tracks)
         // Every stream of the new recording starts open. NOTE for anyone
-        // opening an episode from within player mode (Task 15's series window):
-        // this cannot reset the SHELL's window state, so a flavor the user had
+        // opening an episode from within player mode (that is what
+        // `windows/SeriesWindow.tsx` does): this cannot reset the SHELL's
+        // window state, so a flavor the user had
         // closed in the previous episode still carries `closed: true` there.
         // `windows/VideoWindows.tsx` clears that on an episode change (its
         // 'reset-window' step) - without it the video window's own state
@@ -232,7 +286,11 @@ export function createPlayerStore(client: OpencastClient) {
         // elements - i.e. the new episode would autoplay, which is exactly
         // what spec §7 forbids ("Wiedergabe startet nur auf Nutzer-Geste, nie
         // automatisch beim Episodenwechsel").
-        engine.pause()
+        //
+        // Through `setPlaying` rather than `engine.pause()` directly, so the
+        // reactive mirror the dock's transport renders from goes with it - see
+        // `playing`'s doc comment.
+        get().setPlaying(false)
         teardownStreams()
         engine.seek(0)
 
@@ -314,7 +372,15 @@ export function createPlayerStore(client: OpencastClient) {
         // been rebuilt (or unloaded) since the error happened.
         if (elementsByFlavor.get(flavorType) !== element) return
         if (target.error === message) return // already showing exactly this
-        get().engine.pause()
+        // Intent first, registry second: `unregister` re-derives the stall
+        // invariant, and doing it with intent already cleared means it has
+        // nothing to reconcile - no interim stall edge for the UI to flicker
+        // through on the way to a paused wall.
+        get().setPlaying(false)
+        // The element itself is NOT destroyed and `open` is NOT flipped - see
+        // the interface doc comment. `retire()` inside unregister has already
+        // muted and paused it.
+        get().engine.unregister(flavorType)
         set((state) => ({
           streams: state.streams.map((s) => (s.flavorType === flavorType ? { ...s, error: message } : s)),
         }))
@@ -352,7 +418,7 @@ export function createPlayerStore(client: OpencastClient) {
         // Same reason as openEpisode: intent is sticky across an empty
         // registry, so leaving it playing here would autoplay the NEXT
         // episode the moment its first stream registers.
-        get().engine.pause()
+        get().setPlaying(false)
         teardownStreams()
         set({
           mode: 'browse',
@@ -363,6 +429,15 @@ export function createPlayerStore(client: OpencastClient) {
           seekPreviewS: null,
           stalled: false,
         })
+      },
+
+      setPlaying(next) {
+        const { engine } = get()
+        if (next) engine.play()
+        else engine.pause()
+        // Synchronously in the same block as the engine call, so no observer
+        // can ever see the two disagree.
+        set({ playing: next })
       },
 
       setSubtitles(on) {
@@ -393,7 +468,7 @@ export function createPlayerStore(client: OpencastClient) {
 
       dispose() {
         stopTicking()
-        get().engine.pause()
+        get().setPlaying(false)
         teardownStreams()
       },
     }

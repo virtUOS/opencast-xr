@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useRef } from 'react'
 import { useStore } from 'zustand'
 import type { ThreeEvent } from '@react-three/fiber'
 import { Container, Text, type VanillaContainer } from '@react-three/uikit'
@@ -155,35 +155,28 @@ export function DockTransport({ store }: { store: PlayerStoreApi }) {
   const currentTimeS = useStore(store, (s) => s.currentTimeS)
   const seekPreviewS = useStore(store, (s) => s.seekPreviewS)
   const stalled = useStore(store, (s) => s.stalled)
-  const episodeId = episode?.id
   const durationS = (episode?.durationMs ?? 0) / 1000
 
-  // `engine.playing` is a plain getter, not reactive store state (see
-  // syncEngine.ts's doc comment on it) - intent only ever changes from this
-  // button's own click, or from `openEpisode`/`toBrowse` forcing a pause
-  // (never while THIS component is mounted for browse<->player, since it
-  // unmounts across that boundary - App.tsx only renders it in player mode -
-  // but a same-mount episode swap, e.g. a future "next episode" action,
-  // does force one mid-mount). A plain `useState` seeded from the engine and
-  // reset on an episode change stays correct without teaching store.ts a
-  // mirrored field just for this button.
-  const [intentPlaying, setIntentPlaying] = useState(() => store.getState().engine.playing)
-  useEffect(() => {
-    setIntentPlaying(false)
-  }, [episodeId])
+  // Play intent comes straight from the store's own `playing` field, and this
+  // button writes it through the store's `setPlaying` action - no local mirror.
+  //
+  // It USED to be a `useState` seeded from `engine.playing` (a plain getter, so
+  // not subscribable) and reset on an episode change, which was correct only
+  // while this button's own click and `openEpisode`/`toBrowse` were the only
+  // writers of intent. `reportStreamError` became a fourth one (spec §9 pauses
+  // the wall on a stream failure) and the mirror went stale exactly there: the
+  // engine was paused, this button still showed Pause, and the user's first
+  // click called `pause()` again - a no-op, so recovery took two clicks. One
+  // reactive field with one writer removes the whole failure mode; see
+  // `playing`'s doc comment in store.ts.
+  const playing = useStore(store, (s) => s.playing)
 
   const togglePlay = useCallback(() => {
-    const engine = store.getState().engine
-    if (intentPlaying) {
-      engine.pause()
-      setIntentPlaying(false)
-    } else {
-      engine.play()
-      setIntentPlaying(true)
-    }
-  }, [store, intentPlaying])
+    const state = store.getState()
+    state.setPlaying(!state.playing)
+  }, [store])
 
-  const visual = derivePlaybackVisualState(intentPlaying, stalled)
+  const visual = derivePlaybackVisualState(playing, stalled)
   // Known cosmetic gap (code review, fix round 1): `LoaderCircle` is a
   // static glyph here - no spin animation - so a stall reads as "a
   // different icon" rather than "loading". Animating it would need a

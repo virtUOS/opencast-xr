@@ -52,6 +52,11 @@ export function VerificationHandle({ store }: { store: PlayerStoreApi }) {
         return {
           masterId: state.engine.masterId,
           playing: state.engine.playing,
+          // The store's reactive mirror of the line above - the value the
+          // dock's Play/Pause icon is derived from. Reported separately so a
+          // disagreement between the two (the stale-mirror defect the final
+          // review found) is visible in one snapshot instead of inferred.
+          storePlaying: state.playing,
           stalled: state.stalled,
           currentTimeS: state.currentTimeS,
           domVideos: document.querySelectorAll('video').length,
@@ -60,6 +65,7 @@ export function VerificationHandle({ store }: { store: PlayerStoreApi }) {
             return {
               flavorType: s.flavorType,
               open: s.open,
+              error: s.error ?? null,
               src: el?.getAttribute('src') ?? null,
               currentTime: el?.currentTime ?? null,
               muted: el?.muted ?? null,

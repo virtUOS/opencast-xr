@@ -23,13 +23,17 @@ const HINT_TEXT = 'Keine Untertitel für diese Aufzeichnung verfügbar.'
  * series). Rendered next to `VideoWindows` (see `App.tsx`) - only while
  * `mode === 'player'`, mirroring `DockTransport`'s own gate.
  *
- * `volume` is local `useState`, not a store field: `SyncEngine.setVolume`
- * has no reactive counterpart in `PlayerStore` (see `DockTransport.tsx`'s
- * doc comment on the same issue for play/pause intent) - but unlike intent,
- * the engine's `volume` getter never gets forced back to a fixed value by
- * anything else in this app (no `openEpisode`/`toBrowse` equivalent resets
- * it), so seeding from `engine.volume` on mount is sufficient by itself; no
- * effect is needed to re-sync it on an episode change.
+ * `volume` is local `useState`, not a store field: `SyncEngine.setVolume` has
+ * no reactive counterpart in `PlayerStore`. Play/pause intent, which had the
+ * same shape, DID get one (`playing`/`setPlaying`, see store.ts) - because it
+ * has several writers, and a local mirror of a multi-writer value goes stale
+ * the moment one of them fires from somewhere else (it did: a stream error
+ * pauses the wall). Volume has exactly ONE writer, this component's own
+ * buttons: nothing in the app resets it, not even `openEpisode`/`toBrowse`, so
+ * seeding from `engine.volume` on mount is sufficient by itself and no effect
+ * is needed to re-sync it on an episode change. If a second writer ever
+ * appears (a keyboard shortcut, a mute-all), it needs the same store field
+ * treatment rather than a re-seeding effect.
  *
  * The pure volume-stepping/percent-display math lives in `transportState.ts`
  * alongside the dock's own pure logic - this file stays thin glue.

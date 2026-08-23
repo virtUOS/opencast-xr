@@ -67,6 +67,26 @@ export function videoWindowPlacement(index: number): VideoWindowPlacement {
   }
 }
 
+/**
+ * The second line of the stream-error tile: what the user can do if „Neu laden"
+ * does not help, or `null` when the tile does not need to say.
+ *
+ * Only the LAST open stream gets one, and it exists because that case is the
+ * one with no obvious way out: `canClose` refuses to unload the last stream, so
+ * the window's own X is vetoed (closed and immediately restored - see
+ * 'veto-close'), and single-flavor recordings are the overwhelming majority of
+ * a real Opencast corpus. The reload button covers a transient failure; this
+ * line covers a permanent one, and „Bibliothek" in the dock is the actual
+ * escape. With another stream still up there is nothing to explain - the X
+ * works, and the rest of the wall keeps playing.
+ *
+ * @param canClose `PlayerStore.canClose(flavorType)` for this window's stream.
+ */
+export function streamErrorEscapeHint(canClose: boolean): string | null {
+  if (canClose) return null
+  return 'Einziger Stream dieser Aufzeichnung - hilft Neu laden nicht, zurück über Bibliothek im Dock.'
+}
+
 export type StreamWindowAction =
   | 'none'
   | 'close-stream'

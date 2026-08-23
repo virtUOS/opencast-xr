@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { OpencastClient } from '../opencast/client'
+import { derivePlaybackVisualState } from '../windows/transportState'
 import { createPlayerStore, type PlayerStoreApi } from './store'
 
 // Tracks every store created by makeStore() below so afterEach can dispose()
@@ -77,9 +78,44 @@ function twoStreamEpisodeFixture(id: string, suffix: string) {
   }
 }
 
+/**
+ * The single-flavor shape, which is what almost every real recording is (all
+ * 20 episodes on develop.opencast.org at the time of writing): one stream, so
+ * `canClose` vetoes closing its window and the error tile is the ONLY thing on
+ * screen for that flavor. The interesting case for `reportStreamError`, since
+ * dropping the failed stream empties the engine outright.
+ */
+function oneStreamEpisodeFixture(id: string) {
+  return {
+    result: [
+      {
+        mediapackage: {
+          id,
+          title: `Episode ${id}`,
+          duration: 60000,
+          media: {
+            track: [
+              {
+                id: `${id}-t-presenter`,
+                type: 'presenter/preview',
+                mimetype: 'video/mp4',
+                url: 'https://example.org/solo.mp4',
+                tags: { tag: ['engage-download'] },
+                video: { resolution: '1280x720' },
+              },
+            ],
+          },
+        },
+      },
+    ],
+  }
+}
+
 const EPISODE_FIXTURES: Record<string, unknown> = {
   'ep-1': twoStreamEpisodeFixture('ep-1', ''),
   'ep-2': twoStreamEpisodeFixture('ep-2', '-2'),
+  'ep-3': twoStreamEpisodeFixture('ep-3', '-3'),
+  'ep-solo': oneStreamEpisodeFixture('ep-solo'),
 }
 
 /** A client whose fetchFn resolves /search/episode.json?id=... against EPISODE_FIXTURES. */
@@ -91,6 +127,24 @@ function makeClient() {
   })
   return { client: new OpencastClient({ fetchFn }), fetchFn }
 }
+
+/**
+ * jsdom's `<video>` reports `readyState` 0 and `currentTime` 0 and never
+ * changes either (no decode happens), so any test about the engine's stall
+ * threshold or session clock has to say what the element pretends to be. An
+ * own property shadows the prototype accessor for this one element only.
+ */
+function fakeMedia(el: HTMLVideoElement, values: { readyState?: number; currentTime?: number }): void {
+  if (values.readyState !== undefined) {
+    Object.defineProperty(el, 'readyState', { get: () => values.readyState, configurable: true })
+  }
+  if (values.currentTime !== undefined) {
+    Object.defineProperty(el, 'currentTime', { value: values.currentTime, writable: true, configurable: true })
+  }
+}
+
+/** `readyState` 4 = HAVE_ENOUGH_DATA: a stream that is genuinely playable. */
+const READY = 4
 
 describe('createPlayerStore', () => {
   it('starts in browse mode with no episode and no streams', () => {
@@ -181,6 +235,7 @@ describe('createPlayerStore', () => {
         expect((v as HTMLVideoElement).paused).toBe(true)
       }
     })
+
   })
 
   describe('closeStream / canClose', () => {
@@ -263,6 +318,94 @@ describe('createPlayerStore', () => {
       // The stream is NOT unloaded: its window stays on screen for the tile.
       expect(streams.find((s) => s.flavorType === 'presentation')?.open).toBe(true)
       expect(document.querySelectorAll('video')).toHaveLength(2)
+    })
+
+    it('REGRESSION: drops the failed stream from the engine, so the others are not wedged behind it', async () => {
+      const { client } = makeClient()
+      const store = makeStore(client)
+      await store.getState().openEpisode('ep-1')
+      const healthy = store.getState().getElement('presenter')!
+      const dead = store.getState().getElement('presentation')!
+      // The 404/ACL shape: one element never gets past readyState 0 while the
+      // other is fully buffered.
+      fakeMedia(healthy, { readyState: READY })
+      fakeMedia(dead, { readyState: 0 })
+
+      // Before the error the dead stream legitimately stalls the whole wall -
+      // that is `reconcileStall`'s job while it is still a member.
+      store.getState().setPlaying(true)
+      expect(store.getState().stalled).toBe(true)
+
+      store.getState().reportStreamError('presentation', dead, 'Netzwerkfehler im Stream')
+
+      // The bug: a permanently-failed stream stayed registered, so it kept
+      // reporting readyState < 3 forever - every later play() re-entered the
+      // stall immediately, LoaderCircle latched, and NOTHING could play again.
+      store.getState().setPlaying(true)
+      expect(store.getState().stalled).toBe(false)
+      expect(healthy.paused).toBe(false)
+      // The failed element is out of engine control (retired: muted, paused)
+      // but still loaded, so its window keeps showing the tile.
+      expect(dead.paused).toBe(true)
+      expect(store.getState().streams.find((s) => s.flavorType === 'presentation')).toMatchObject({
+        open: true,
+        error: 'Netzwerkfehler im Stream',
+      })
+      expect(store.getState().getElement('presentation')).toBe(dead)
+      expect(document.querySelectorAll('video')).toHaveLength(2)
+    })
+
+    it('hands the session clock over when the FAILED stream was the master', async () => {
+      const { client } = makeClient()
+      const store = makeStore(client)
+      await store.getState().openEpisode('ep-1')
+      const master = store.getState().getElement('presenter')!
+      const successor = store.getState().getElement('presentation')!
+      expect(store.getState().engine.masterId).toBe('presenter')
+      fakeMedia(master, { readyState: 0, currentTime: 12.5 })
+      fakeMedia(successor, { readyState: READY, currentTime: 12.5 })
+
+      store.getState().reportStreamError('presenter', master, 'Netzwerkfehler im Stream')
+
+      // Task 7's handover, now reachable from an error: the departing master's
+      // position becomes the session position and the next-best stream picks
+      // the clock up - no masterless-but-populated engine, no silence.
+      expect(store.getState().engine.masterId).toBe('presentation')
+      expect(store.getState().engine.currentTime).toBe(12.5)
+      expect(successor.muted).toBe(false)
+      store.getState().setPlaying(true)
+      expect(successor.paused).toBe(false)
+    })
+
+    it('empties the engine for a single-flavor episode instead of wedging it, and reload recovers', async () => {
+      const { client } = makeClient()
+      const store = makeStore(client)
+      await store.getState().openEpisode('ep-solo')
+      const only = store.getState().getElement('presenter')!
+      fakeMedia(only, { readyState: 0, currentTime: 30 })
+      // The window cannot be closed either (spec's last-stream veto), which is
+      // what made this the total dead end the tile now names an escape from.
+      expect(store.getState().canClose('presenter')).toBe(false)
+
+      store.getState().reportStreamError('presenter', only, 'Stream nicht gefunden (404)')
+
+      expect(store.getState().engine.masterId).toBeNull()
+      // Task 7's rule: the position survives an emptied registry.
+      expect(store.getState().engine.currentTime).toBe(30)
+      // Play on an empty engine is harmless - no throw, no latched stall.
+      store.getState().setPlaying(true)
+      expect(store.getState().stalled).toBe(false)
+      store.getState().tickOnce()
+      expect(store.getState().currentTimeS).toBe(30)
+
+      store.getState().reloadStream('presenter')
+
+      const fresh = store.getState().getElement('presenter')!
+      expect(fresh).not.toBe(only)
+      expect(store.getState().engine.masterId).toBe('presenter')
+      expect(store.getState().streams[0].error).toBeUndefined()
+      // Rejoined ON the preserved session clock, not back at 0.
+      expect(fresh.currentTime).toBe(30)
     })
 
     it('ignores a report from an element that is no longer the registered one', async () => {
@@ -407,6 +550,73 @@ describe('createPlayerStore', () => {
         { flavorType: 'presentation', url: 'https://example.org/presentation-2.mp4', open: true },
       ])
       expect(store.getState().streams.every((s) => s.error === undefined)).toBe(true)
+    })
+  })
+
+  describe('playing / setPlaying', () => {
+    it('is the single writer of play intent: it drives the engine AND the reactive mirror', async () => {
+      const { client } = makeClient()
+      const store = makeStore(client)
+      await store.getState().openEpisode('ep-1')
+      for (const el of document.querySelectorAll('video')) fakeMedia(el as HTMLVideoElement, { readyState: READY })
+      expect(store.getState().playing).toBe(false)
+
+      store.getState().setPlaying(true)
+
+      expect(store.getState().playing).toBe(true)
+      expect(store.getState().engine.playing).toBe(true)
+      expect(store.getState().getElement('presenter')?.paused).toBe(false)
+
+      store.getState().setPlaying(false)
+
+      expect(store.getState().playing).toBe(false)
+      expect(store.getState().engine.playing).toBe(false)
+      expect(store.getState().getElement('presenter')?.paused).toBe(true)
+    })
+
+    it('an episode swap and toBrowse both clear it, in step with the engine', async () => {
+      const { client } = makeClient()
+      const store = makeStore(client)
+      await store.getState().openEpisode('ep-1')
+      store.getState().setPlaying(true)
+
+      await store.getState().openEpisode('ep-2')
+
+      expect(store.getState().playing).toBe(false)
+      expect(store.getState().engine.playing).toBe(false)
+
+      store.getState().setPlaying(true)
+      store.getState().toBrowse()
+
+      expect(store.getState().playing).toBe(false)
+      expect(store.getState().engine.playing).toBe(false)
+    })
+
+    it('REGRESSION: a stream error clears it, so the dock shows Play and the first click resumes', async () => {
+      const { client } = makeClient()
+      const store = makeStore(client)
+      await store.getState().openEpisode('ep-1')
+      const healthy = store.getState().getElement('presenter')!
+      const dead = store.getState().getElement('presentation')!
+      fakeMedia(healthy, { readyState: READY })
+      fakeMedia(dead, { readyState: 0 })
+      store.getState().setPlaying(true)
+
+      store.getState().reportStreamError('presentation', dead, 'Netzwerkfehler im Stream')
+
+      // The bug this pins: `reportStreamError` pauses the engine, so a
+      // component mirroring intent in its own useState kept showing Pause and
+      // its next click called pause() again - a no-op. One reactive field means
+      // there is nothing left to go stale.
+      expect(store.getState().playing).toBe(false)
+      expect(store.getState().engine.playing).toBe(false)
+      expect(derivePlaybackVisualState(store.getState().playing, store.getState().stalled)).toBe('play')
+
+      store.getState().setPlaying(true)
+
+      expect(store.getState().playing).toBe(true)
+      expect(healthy.paused).toBe(false)
+      expect(derivePlaybackVisualState(store.getState().playing, store.getState().stalled)).toBe('pause')
     })
   })
 

@@ -6,6 +6,7 @@ import type { PlayerStoreApi } from '../player/store'
 import { describeMediaError } from '../player/mediaElements'
 import {
   VIDEO_ASPECT,
+  streamErrorEscapeHint,
   streamWindowAction,
   videoWindowId,
   videoWindowPlacement,
@@ -131,6 +132,7 @@ function useStreamErrorWatch(
 
 const ERROR_BG = '#3a2028'
 const ERROR_TEXT = '#ffd8de'
+const ERROR_HINT_TEXT = '#d0a0ac'
 const RELOAD_BG = '#542c38'
 const RELOAD_BG_HOVER = '#6a3a48'
 // „Neu laden" per the spec's own wording, in plain ASCII letters - see
@@ -140,7 +142,10 @@ const RELOAD_LABEL = 'Neu laden'
 
 /**
  * What a video window shows instead of its picture once its stream has failed:
- * the concrete cause plus one button that rebuilds the stream.
+ * the concrete cause, one button that rebuilds the stream, and - only when this
+ * is the last open stream - the way out if rebuilding does not help
+ * (`streamErrorEscapeHint`; that stream's window cannot be closed, so the tile
+ * has to say what can be done instead).
  *
  * Mirrors `LibraryWindow`'s `ErrorPanel` (same palette, same "cause + retry"
  * shape) rather than sharing it, because that one is a full-width panel inside
@@ -148,7 +153,13 @@ const RELOAD_LABEL = 'Neu laden'
  * twelve lines of uikit layout is cheaper than a props-driven abstraction over
  * two callers with different geometry.
  */
-function StreamErrorTile({ message, onReload }: { message: string; onReload: () => void }) {
+function StreamErrorTile({
+  message, hint, onReload,
+}: {
+  message: string
+  hint: string | null
+  onReload: () => void
+}) {
   return (
     <Container
       flexGrow={1}
@@ -175,6 +186,7 @@ function StreamErrorTile({ message, onReload }: { message: string; onReload: () 
       >
         <Text fontSize={12} color={ERROR_TEXT}>{RELOAD_LABEL}</Text>
       </Container>
+      {hint != null && <Text fontSize={10} color={ERROR_HINT_TEXT}>{hint}</Text>}
     </Container>
   )
 }
@@ -203,6 +215,9 @@ function VideoWindow({
   useStreamWindowSync(store, flavorType)
   useStreamErrorWatch(store, flavorType, element)
   const placement = useMemo(() => videoWindowPlacement(index), [index])
+  // Only the error tile reads this (a primitive derivation over `streams`, so
+  // subscribing to it costs nothing when no error is showing).
+  const canClose = useStore(store, (s) => s.canClose(flavorType))
 
   return (
     <Window
@@ -227,7 +242,11 @@ function VideoWindow({
           playback, so unmounting it (minimize, close) does not stop the video -
           it only drops the texture. */}
       {error != null ? (
-        <StreamErrorTile message={error} onReload={() => store.getState().reloadStream(flavorType)} />
+        <StreamErrorTile
+          message={error}
+          hint={streamErrorEscapeHint(canClose)}
+          onReload={() => store.getState().reloadStream(flavorType)}
+        />
       ) : element ? (
         <VideoSurface src={element} />
       ) : null}
