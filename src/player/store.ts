@@ -46,6 +46,27 @@ export interface PlayerStore {
    * method was simpler and needed no extra constructor plumbing.
    */
   tickOnce(): void
+  /**
+   * The element currently registered for `flavorType`, or `undefined` if
+   * that stream doesn't exist or is closed. A plain getter (not a piece of
+   * reactive state) is safe here because every place that changes which
+   * element is registered for a flavorType (`openEpisode`, `closeStream`,
+   * `reopenStream`) also calls `set(...)` in the same synchronous block, so
+   * any React binding that re-renders off the surrounding state (e.g.
+   * `streams` or `mode`) is guaranteed to already see the new element by the
+   * time it calls this. Needed by whatever renders the video windows
+   * (Task 12) to get from a flavorType to the actual `<video>`.
+   */
+  getElement(flavorType: string): HTMLVideoElement | undefined
+  /**
+   * Stops the store's own ticking interval, unregisters and destroys every
+   * open stream's element, and pauses the engine. Not part of the player's
+   * runtime behaviour (that's `toBrowse`, which additionally resets the
+   * visible state to browse mode) - this is a teardown seam for whoever owns
+   * the store's lifetime (a React unmount, HMR, or a test's `afterEach`) to
+   * call so a discarded store doesn't leak its 250ms interval forever.
+   */
+  dispose(): void
 }
 
 /**
@@ -97,9 +118,17 @@ export function createPlayerStore(client: OpencastClient) {
       stalled: false,
 
       async openEpisode(id) {
+        // Idempotent: re-opening the episode that's already showing (a
+        // double-click, a re-fired effect) is a no-op rather than a
+        // needless teardown+rebuild of every stream's element.
+        if (get().mode === 'player' && get().episode?.id === id) return
+
         // Fetch BEFORE tearing anything down: a failed/unresolved lookup
-        // must leave whatever was already open (browse, or a previous
-        // episode) untouched rather than mutated halfway.
+        // (client.getEpisode/loadCaptions reject with OpencastError; there's
+        // no error field on this store, so the rejection propagates to the
+        // caller - Task 11's transport/UI layer is expected to catch it) must
+        // leave whatever was already open (browse, or a previous episode)
+        // untouched rather than mutated halfway.
         const episode = await get().client.getEpisode(id)
         if (!episode) return
         const cues = await get().client.loadCaptions(episode)
@@ -112,6 +141,17 @@ export function createPlayerStore(client: OpencastClient) {
         // emptied engine BEFORE registering the new recording's streams - see
         // SyncEngine's "SWITCHING RECORDINGS" doc. Otherwise the first stream
         // registered below would resume at the previous session position.
+        //
+        // pause() FIRST, and specifically before any registration: intent is
+        // sticky across an empty registry (by design - see SyncEngine's
+        // "playing" doc), so if the user had pressed play on the previous
+        // episode, `intentPlaying` is still true here. Without this,
+        // `engine.register` below (via `reconcileToIntent`) would call
+        // `safePlay` on every one of the new episode's freshly created
+        // elements - i.e. the new episode would autoplay, which is exactly
+        // what spec §7 forbids ("Wiedergabe startet nur auf Nutzer-Geste, nie
+        // automatisch beim Episodenwechsel").
+        engine.pause()
         teardownStreams()
         engine.seek(0)
 
@@ -131,6 +171,7 @@ export function createPlayerStore(client: OpencastClient) {
           mode: 'player',
           currentTimeS: engine.currentTime,
           seekPreviewS: null,
+          stalled: false,
         })
         startTicking()
       },
@@ -171,6 +212,10 @@ export function createPlayerStore(client: OpencastClient) {
 
       toBrowse() {
         stopTicking()
+        // Same reason as openEpisode: intent is sticky across an empty
+        // registry, so leaving it playing here would autoplay the NEXT
+        // episode the moment its first stream registers.
+        get().engine.pause()
         teardownStreams()
         set({
           mode: 'browse',
@@ -203,6 +248,16 @@ export function createPlayerStore(client: OpencastClient) {
         const { engine } = get()
         engine.tick()
         set({ currentTimeS: engine.currentTime })
+      },
+
+      getElement(flavorType) {
+        return elementsByFlavor.get(flavorType)
+      },
+
+      dispose() {
+        stopTicking()
+        get().engine.pause()
+        teardownStreams()
       },
     }
   })

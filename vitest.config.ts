@@ -6,5 +6,13 @@ import { defineConfig } from 'vitest/config'
 // the demo's plain `node`) because this app's data layer parses Opencast API
 // responses and VTT captions destined for DOM-facing components.
 export default defineConfig({
-  test: { environment: 'jsdom', globals: false, include: ['src/**/*.test.ts?(x)'] },
+  test: {
+    environment: 'jsdom',
+    globals: false,
+    include: ['src/**/*.test.ts?(x)'],
+    // Gives HTMLMediaElement a real play/pause/paused instead of jsdom's
+    // silent "not implemented" stubs - see the file for why. Runs once per
+    // test file, before jsdom's own classes exist on `window`.
+    setupFiles: ['./src/test/mediaElementStubs.ts'],
+  },
 })
