@@ -571,4 +571,29 @@ describe('SyncEngine: stall detection and recovery', () => {
     engine.tick()
     expect(onStall.mock.calls).toEqual([[true], [false]])
   })
+
+  it('(j) [fix C2 round 2] play() on a fresh, still-buffering (never-played, paused) element reports a stall and actually resumes it on recovery', () => {
+    const onStall = vi.fn()
+    const engine = new SyncEngine({ onStall })
+    const video = new FakeVideo()
+    // Never played yet (paused stays at its default `true`), and not
+    // buffered enough - the state a just-mounted <video> is commonly in.
+    video.readyState = 2 // HAVE_CURRENT_DATA - below the HAVE_FUTURE_DATA=3 threshold
+    engine.register('only', video, 0)
+
+    engine.play()
+
+    expect(onStall).toHaveBeenCalledWith(true)
+    expect(engine.playing).toBe(true) // intent survives, same as any other stall
+
+    video.readyState = 4
+    engine.tick()
+
+    // The regression this guards: onStall(false) firing while the element
+    // was never actually told to play, because enterStall() found nobody
+    // to resume (it looked "already paused, not our concern" at the moment
+    // detectStall() ran before the fan-out).
+    expect(video.paused).toBe(false)
+    expect(onStall).toHaveBeenCalledWith(false)
+  })
 })

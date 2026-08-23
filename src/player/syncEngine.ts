@@ -135,14 +135,28 @@ export class SyncEngine {
 
   play(): void {
     this.intentPlaying = true
+    // Unconditional fan-out FIRST, detectStall() AFTER - order matters.
+    // safePlay() flips each video's `paused` to false synchronously (real
+    // <video> elements do this too: play() sets paused=false immediately,
+    // independent of whether enough data has buffered yet). enterStall()
+    // decides who it owes a resume by checking `!video.paused` - so running
+    // detectStall() first (the previous ordering) meant a still-buffering
+    // element that had never been played yet (paused===true from a fresh
+    // registration, or from a prior pause()) looked exactly like a video
+    // the caller genuinely wants paused: enterStall() recorded nobody for
+    // it, onStall(true) fired, and play() returned without ever calling
+    // .play() on it - so recovery's onStall(false) would fire with that
+    // element still stopped forever. Playing everything first, then
+    // re-checking for a stall, means a buffering element is already
+    // "wants to be playing" by the time enterStall looks at it, so it's
+    // correctly captured for the stall's own resume pass.
+    for (const { video } of this.entries.values()) safePlay(video)
     // Re-check right now rather than waiting for an external tick(): if a
     // stall had already cleared (readyState recovered) while nothing was
     // driving tick() - e.g. the caller paused, which stops the rAF/interval
     // that would otherwise notice - this resolves it immediately instead of
     // leaving playback wedged until some future tick() happens to run.
     this.detectStall()
-    if (this.stalled) return // still genuinely stalled - the resume happens on exitStall, not here
-    for (const { video } of this.entries.values()) safePlay(video)
   }
 
   pause(): void {
