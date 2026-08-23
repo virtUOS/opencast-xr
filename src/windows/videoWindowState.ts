@@ -67,7 +67,12 @@ export function videoWindowPlacement(index: number): VideoWindowPlacement {
   }
 }
 
-export type StreamWindowAction = 'none' | 'close-stream' | 'reopen-stream' | 'veto-close'
+export type StreamWindowAction =
+  | 'none'
+  | 'close-stream'
+  | 'reopen-stream'
+  | 'veto-close'
+  | 'reset-window'
 
 export interface StreamWindowSyncInput {
   /**
@@ -85,6 +90,22 @@ export interface StreamWindowSyncInput {
   streamOpen: boolean | undefined
   /** `PlayerStore.canClose(flavorType)` - false exactly when this is the last open stream. */
   canClose: boolean
+  /**
+   * True on the first evaluation after the open episode changed - i.e. this
+   * window is now showing a DIFFERENT recording's stream than the state it is
+   * being compared against was produced for.
+   *
+   * This exists to disarm a trap: `openEpisode` rebuilds `streams` with every
+   * flavor `open: true`, but it cannot touch the shell, so a flavor the user
+   * had CLOSED in the previous episode still carries `closed: true` in the
+   * shell's window entry. Without this flag the very first comparison after the
+   * swap reads "shell closed, stream open" and unloads the new recording's
+   * stream on arrival - silently, and (with two or more streams, where
+   * `canClose` permits it) permanently. The stale flag has to be cleared
+   * BEFORE the normal rules are allowed to fire, which is what 'reset-window'
+   * does.
+   */
+  episodeChanged: boolean
 }
 
 /**
@@ -104,6 +125,10 @@ export interface StreamWindowSyncInput {
  * 'none'), and re-deriving from current state cannot get stuck holding a stale
  * "previous" value - the same reasoning as SyncEngine's `reconcileStall`.
  *
+ * 'reset-window' is the one step that writes to the SHELL rather than the store:
+ * it clears a `closed`/`minimized` flag left over from the previous episode, and
+ * it takes precedence over every other rule (see `episodeChanged`).
+ *
  * 'veto-close' is the one asymmetry: sphere-shell 0.3.0's `<Window>` has no
  * `closable` prop (the plan assumed one), so the last open stream's window
  * cannot suppress its own X button. The shell closes it, the store refuses to
@@ -111,11 +136,19 @@ export interface StreamWindowSyncInput {
  * caller undoes the shell's close instead. See VideoWindows.tsx.
  */
 export function streamWindowAction(input: StreamWindowSyncInput): StreamWindowAction {
-  const { shell, streamOpen, canClose } = input
+  const { shell, streamOpen, canClose, episodeChanged } = input
   // Not registered (or already gone), or no such stream: nothing is being
   // disagreed about yet. Notably this is the first-render state, where acting
   // on a missing entry would look exactly like "the shell closed it".
   if (shell === undefined || streamOpen === undefined) return 'none'
+
+  // A fresh recording's stream is never something to close or reopen: the
+  // shell's flags describe the PREVIOUS episode's window, so they are cleared
+  // (once) and the normal rules take over from the next evaluation. See
+  // `episodeChanged`. Minimized is cleared along with closed - a new recording
+  // starts with its windows up.
+  if (episodeChanged) return shell.closed || shell.minimized ? 'reset-window' : 'none'
+
   if (shell.closed && streamOpen) return canClose ? 'close-stream' : 'veto-close'
   if (!shell.closed && !streamOpen) return 'reopen-stream'
   return 'none'

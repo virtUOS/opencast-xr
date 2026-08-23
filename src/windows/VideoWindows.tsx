@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { useStore } from 'zustand'
 import { VideoSurface, Window, useShellStore, useWindowState } from 'sphere-shell'
 import type { PlayerStoreApi } from '../player/store'
@@ -21,6 +21,16 @@ import {
  * store's. So this watches the shell entry and pushes any disagreement into
  * the store - which is what makes a dock restore reload the stream at all.
  *
+ * It also owns the EPISODE-SWAP reset, and this is the layer that has to: the
+ * player store rebuilds `streams` on `openEpisode` but has no access to the
+ * shell store (created inside `<WindowShell>` and reachable only through React
+ * context), so a flavor the user closed in the previous episode would keep its
+ * stale `closed: true` shell flag and the rules below would unload the new
+ * recording's stream the moment it arrived. Giving the store a shell dependency
+ * to fix that would invert the layering; noticing the swap here - where both
+ * stores are already in hand - does not. See `streamWindowAction`'s
+ * `episodeChanged`.
+ *
  * The decision itself is `streamWindowAction` (pure, unit-tested); this hook is
  * only the subscription and the dispatch. Every action it can take is
  * idempotent (`closeStream`/`reopenStream` no-op when already in that state,
@@ -34,15 +44,32 @@ function useStreamWindowSync(store: PlayerStoreApi, flavorType: string): void {
   // `canClose` is a pure derivation over `streams` returning a primitive, so
   // calling it inside the selector neither churns renders nor mutates.
   const canClose = useStore(store, (s) => s.canClose(flavorType))
+  const episodeId = useStore(store, (s) => s.episode?.id)
+
+  // Which episode the last DISPATCH was made for. Seeded with the current one,
+  // so a window mounting into an episode is not itself a swap (its shell entry
+  // was just registered and is clean by construction). Compared during render
+  // and advanced in the effect below - the same prop-vs-previous pattern
+  // sphere-shell's own <Window> uses for its size/position sync.
+  const dispatchedForEpisode = useRef(episodeId)
+  const episodeChanged = dispatchedForEpisode.current !== episodeId
 
   const action = streamWindowAction({
     shell: entry ? { closed: entry.closed, minimized: entry.minimized } : undefined,
     streamOpen,
     canClose,
+    episodeChanged,
   })
 
   useEffect(() => {
+    dispatchedForEpisode.current = episodeId
     switch (action) {
+      case 'reset-window':
+        // Stale flag from the PREVIOUS episode's window. Clearing it is all
+        // this step does: the next evaluation sees a clean entry, `streams`
+        // untouched, and falls through to the normal rules.
+        shellStore.getState().restore(id)
+        break
       case 'close-stream':
         store.getState().closeStream(flavorType)
         break
@@ -61,8 +88,10 @@ function useStreamWindowSync(store: PlayerStoreApi, flavorType: string): void {
     }
     // `action` is recomputed from current state on every render, and every
     // branch above makes the two states agree - so the next evaluation is
-    // 'none' and this cannot loop.
-  }, [action, store, shellStore, flavorType, id])
+    // 'none' and this cannot loop. `episodeId` is a dependency in its own
+    // right: an 'episodeChanged' round that needs no reset yields 'none', and
+    // the ref above still has to be advanced for it.
+  }, [action, episodeId, store, shellStore, flavorType, id])
 }
 
 /**

@@ -30,7 +30,36 @@ export interface PlayerStore {
   seekPreviewS: number | null
   stalled: boolean
   openEpisode(id: string): Promise<void>
+  /**
+   * Unloads one stream: unregisters it from the engine and destroys its
+   * element. Refuses to close the last open stream (see `canClose`).
+   *
+   * DO NOT CALL THIS DIRECTLY while the video windows are on screen. Player
+   * mode renders `windows/VideoWindows.tsx`, and for as long as it is mounted
+   * **the shell's window state owns open/closed**: each video window watches
+   * its own sphere-shell entry and pushes any disagreement back into this store
+   * (that watcher is the only way a dock-tile restore can be noticed at all -
+   * sphere-shell has no `onRestore` callback). So a bare `closeStream` leaves
+   * the shell window still open while the stream is closed, which the watcher
+   * reads as "the user just restored it" and immediately undoes with
+   * `reopenStream` - silently, with no error, at the cost of destroying,
+   * recreating and re-registering the element once per attempt.
+   *
+   * To close a stream from anywhere else (a transport control, a keyboard
+   * shortcut), close its WINDOW instead - `shellStore.close(videoWindowId(f))`,
+   * or the window's own X button - and let the watcher call this.
+   */
   closeStream(flavorType: string): void
+  /**
+   * Reloads a previously closed stream: creates a fresh element and registers
+   * it with the engine at its original preference, so the engine's rejoin
+   * handling puts it back on the session clock.
+   *
+   * Same ownership rule as `closeStream`: while `VideoWindows` is mounted this
+   * is the watcher's to call (it fires it when a dock-tile click clears the
+   * window's `closed` flag). Calling it directly on a stream whose window is
+   * still closed in the shell gets undone the same way, in reverse.
+   */
   reopenStream(flavorType: string): void
   toBrowse(): void
   setSubtitles(on: boolean): void
@@ -133,6 +162,14 @@ export function createPlayerStore(client: OpencastClient) {
         if (!episode) return
         const cues = await get().client.loadCaptions(episode)
         const sources = selectStreams(episode.tracks)
+        // Every stream of the new recording starts open. NOTE for anyone
+        // opening an episode from within player mode (Task 15's series window):
+        // this cannot reset the SHELL's window state, so a flavor the user had
+        // closed in the previous episode still carries `closed: true` there.
+        // `windows/VideoWindows.tsx` clears that on an episode change (its
+        // 'reset-window' step) - without it the video window's own state
+        // watcher would read the stale flag and unload the new recording's
+        // stream on arrival.
         const streams: StreamState[] = sources.map((s) => ({ flavorType: s.flavorType, url: s.url, open: true }))
 
         const { engine } = get()

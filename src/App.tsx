@@ -68,10 +68,18 @@ export function App() {
   }, [playerStore])
   const mode = useStore(playerStore, (s) => s.mode)
 
-  // Non-null exactly in a dev build (see the client memo above). Held as its own
-  // binding so the checkbox's presence is tied to the client that can actually
-  // honour it, rather than to a second, independent `import.meta.env.DEV` test.
-  const devClient = client instanceof SyntheticDualStreamClient ? client : null
+  // Non-null exactly in a dev build (see the client memo above). The
+  // `instanceof` keeps the checkbox tied to the client that can actually honour
+  // it - but it must sit BEHIND the `import.meta.env.DEV` short-circuit, not
+  // instead of it: on its own it is a live reference to
+  // SyntheticDualStreamClient, which pins the class, the syntheticDualStream
+  // helper, the flavor array, the checkbox JSX and its German strings into the
+  // production bundle (grep-confirmed - they shipped, behaviourally inert, in
+  // the first cut of this file). Vite replaces `import.meta.env.DEV` with the
+  // literal `false` in a production build, so `false && ...` folds statically,
+  // `devClient` becomes a constant `null`, and everything reachable only
+  // through it is dead code the bundler drops.
+  const devClient = import.meta.env.DEV && client instanceof SyntheticDualStreamClient ? client : null
   const [syntheticSecondStream, setSyntheticSecondStream] = useState(false)
   const toggleSyntheticSecondStream = useCallback(
     (on: boolean) => {

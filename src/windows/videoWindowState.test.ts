@@ -70,7 +70,9 @@ describe('streamWindowAction', () => {
   const shellClosed = { closed: true, minimized: false }
 
   function act(overrides: Partial<StreamWindowSyncInput> = {}): string {
-    return streamWindowAction({ shell: shellOpen, streamOpen: true, canClose: true, ...overrides })
+    return streamWindowAction({
+      shell: shellOpen, streamOpen: true, canClose: true, episodeChanged: false, ...overrides,
+    })
   }
 
   it('does nothing while the shell entry does not exist yet (first render)', () => {
@@ -122,5 +124,79 @@ describe('streamWindowAction', () => {
     // restoreWindow clears both flags, so this is the state right after a dock
     // click on such a tile.
     expect(act({ shell: { closed: false, minimized: false }, streamOpen: false })).toBe('reopen-stream')
+  })
+
+  describe('episode swap (stale shell flag trap)', () => {
+    it('does NOT unload a fresh episode\'s stream whose window was closed in the previous one', () => {
+      // The trap: openEpisode rebuilds `streams` with open: true but cannot
+      // touch the shell, so the closed flag is left over from episode A. With
+      // two streams `canClose` is true, so the normal rule would have unloaded
+      // this one on arrival - and stayed unloaded.
+      expect(act({ shell: shellClosed, streamOpen: true, canClose: true, episodeChanged: true }))
+        .toBe('reset-window')
+    })
+
+    it('clears a leftover MINIMIZED flag too - a new recording starts with its windows up', () => {
+      expect(act({ shell: { closed: false, minimized: true }, episodeChanged: true }))
+        .toBe('reset-window')
+    })
+
+    it('does nothing on a swap whose window state is already clean', () => {
+      expect(act({ shell: shellOpen, streamOpen: true, episodeChanged: true })).toBe('none')
+    })
+
+    it('does not reopen on the swap round: the reset comes first, rules follow after', () => {
+      // A stream that is somehow closed in the store on the swap round must not
+      // be reopened by this evaluation - the shell flag is the untrustworthy
+      // half, so nothing but the reset may happen until it has been cleared.
+      expect(act({ shell: shellClosed, streamOpen: false, episodeChanged: true })).toBe('reset-window')
+      expect(act({ shell: shellOpen, streamOpen: false, episodeChanged: true })).toBe('none')
+    })
+
+    it('is inert before the window is registered', () => {
+      expect(act({ shell: undefined, episodeChanged: true })).toBe('none')
+    })
+
+    it('resumes normal rules on the evaluation after the reset', () => {
+      // Two-step: reset clears the flag (shell entry becomes open), and the
+      // next round - no longer an episode change - agrees with the store.
+      expect(act({ shell: shellClosed, streamOpen: true, episodeChanged: true })).toBe('reset-window')
+      expect(act({ shell: shellOpen, streamOpen: true, episodeChanged: false })).toBe('none')
+    })
+  })
+
+  // These encode the "cannot loop" invariant the implementation relies on:
+  // every action makes the two states agree, so the FOLLOW-UP evaluation is
+  // always 'none'. A comment cannot fail when someone changes a rule.
+  describe('two-step sequences settle', () => {
+    it('veto-close then restore settles: no oscillation', () => {
+      expect(act({ shell: shellClosed, streamOpen: true, canClose: false })).toBe('veto-close')
+      // ...the hook called shellStore.restore(id), so the entry is open again
+      // while the stream never closed:
+      expect(act({ shell: shellOpen, streamOpen: true, canClose: false })).toBe('none')
+    })
+
+    it('close-stream then the closed state settles', () => {
+      expect(act({ shell: shellClosed, streamOpen: true, canClose: true })).toBe('close-stream')
+      // canClose flips to true-for-a-closed-stream (see the store: a stream
+      // that is not open is never "the last open stream"), and the two agree:
+      expect(act({ shell: shellClosed, streamOpen: false })).toBe('none')
+    })
+
+    it('reopen-stream then the open state settles', () => {
+      expect(act({ shell: shellOpen, streamOpen: false })).toBe('reopen-stream')
+      expect(act({ shell: shellOpen, streamOpen: true })).toBe('none')
+    })
+
+    it('an unmount as the second step is inert, whatever the first step was', () => {
+      // The window unregisters (mode change, episode swap dropping this flavor,
+      // shell teardown) between the two evaluations. The entry is gone while
+      // the store still says open - which must NOT read as "the shell closed
+      // it", or teardown would unload streams behind the store's back.
+      expect(act({ shell: shellClosed, streamOpen: true, canClose: false })).toBe('veto-close')
+      expect(act({ shell: undefined, streamOpen: true, canClose: false })).toBe('none')
+      expect(act({ shell: shellClosed, streamOpen: true })).toBe('close-stream')
+      expect(act({ shell: undefined, streamOpen: false })).toBe('none')
+    })
   })
 })
