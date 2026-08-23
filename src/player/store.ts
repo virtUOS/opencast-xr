@@ -269,7 +269,15 @@ export function createPlayerStore(client: OpencastClient) {
           elementsByFlavor.delete(flavorType)
         }
         set((state) => ({
-          streams: state.streams.map((s) => (s.flavorType === flavorType ? { ...s, open: false } : s)),
+          // `error` goes with the element: a closed stream has no window
+          // content and therefore no error tile to show, and leaving the
+          // message behind would resurrect it on the next reopen - a fresh,
+          // healthy element hidden behind a stale tile that only a redundant
+          // „Neu laden" (another full rebuild) could clear. See reopenStream,
+          // which clears it again for the same reason from the other side.
+          streams: state.streams.map((s) =>
+            s.flavorType === flavorType ? { ...s, open: false, error: undefined } : s,
+          ),
         }))
       },
 
@@ -287,7 +295,15 @@ export function createPlayerStore(client: OpencastClient) {
         engine.register(flavorType, el, index)
 
         set((state) => ({
-          streams: state.streams.map((s) => (s.flavorType === flavorType ? { ...s, open: true } : s)),
+          // Cleared here as well as in closeStream, on purpose rather than by
+          // accident: the element above is brand new, so whatever went wrong
+          // with its predecessor cannot describe it. Belt and braces - either
+          // clear alone fixes the close->reopen leak, and neither depends on
+          // the other having run (a stream can also be reopened after a
+          // close that never went through closeStream at all).
+          streams: state.streams.map((s) =>
+            s.flavorType === flavorType ? { ...s, open: true, error: undefined } : s,
+          ),
         }))
       },
 

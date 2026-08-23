@@ -340,6 +340,55 @@ describe('createPlayerStore', () => {
       expect(document.querySelectorAll('video')).toHaveLength(1)
     })
 
+    it('closing an errored stream drops its error, and reopening comes back clean', async () => {
+      const { client } = makeClient()
+      const store = makeStore(client)
+      await store.getState().openEpisode('ep-1')
+      const failed = store.getState().getElement('presentation')!
+      store.getState().reportStreamError('presentation', failed, 'Netzwerkfehler im Stream')
+
+      store.getState().closeStream('presentation')
+
+      // A closed stream has no window content, so there is no tile to show -
+      // and leaving the message behind would resurrect it over the next,
+      // healthy element.
+      expect(store.getState().streams.find((s) => s.flavorType === 'presentation')).toEqual({
+        flavorType: 'presentation',
+        url: 'https://example.org/presentation.mp4',
+        open: false,
+        error: undefined,
+      })
+
+      store.getState().reopenStream('presentation')
+
+      const reopened = store.getState().streams.find((s) => s.flavorType === 'presentation')
+      expect(reopened?.open).toBe(true)
+      expect(reopened?.error).toBeUndefined()
+      // ...and the element behind it is a real, fresh one, not the failed one.
+      const fresh = store.getState().getElement('presentation')
+      expect(fresh).toBeDefined()
+      expect(fresh).not.toBe(failed)
+      expect(fresh?.getAttribute('src')).toBe('https://example.org/presentation.mp4')
+    })
+
+    it('reopenStream clears an error even when the close did not go through closeStream', async () => {
+      const { client } = makeClient()
+      const store = makeStore(client)
+      await store.getState().openEpisode('ep-1')
+      const failed = store.getState().getElement('presentation')!
+      store.getState().reportStreamError('presentation', failed, 'Netzwerkfehler im Stream')
+      // Hand-built "closed with the error still on it": the state closeStream
+      // used to leave behind, and the state any other close path could still
+      // produce. Each clear has to stand on its own.
+      store.setState((state) => ({
+        streams: state.streams.map((s) => (s.flavorType === 'presentation' ? { ...s, open: false } : s)),
+      }))
+
+      store.getState().reopenStream('presentation')
+
+      expect(store.getState().streams.find((s) => s.flavorType === 'presentation')?.error).toBeUndefined()
+    })
+
     it('an episode swap clears a stream error from the previous episode', async () => {
       const { client } = makeClient()
       const store = makeStore(client)
@@ -349,6 +398,14 @@ describe('createPlayerStore', () => {
 
       await store.getState().openEpisode('ep-2')
 
+      // openEpisode rebuilds `streams` from scratch, so the new recording's
+      // entries are clean by construction rather than by an explicit clear -
+      // pinned here because "by construction" is exactly the kind of property
+      // a later refactor (e.g. carrying state across a swap) can quietly lose.
+      expect(store.getState().streams).toEqual([
+        { flavorType: 'presenter', url: 'https://example.org/presenter-2.mp4', open: true },
+        { flavorType: 'presentation', url: 'https://example.org/presentation-2.mp4', open: true },
+      ])
       expect(store.getState().streams.every((s) => s.error === undefined)).toBe(true)
     })
   })

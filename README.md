@@ -56,19 +56,34 @@ set them before entering VR.
 
 ## Server configuration
 
-The default server is `https://develop.opencast.org`
-(`src/opencast/client.ts`). It is **code-only**: there is no UI field and no
-environment variable. Point the player elsewhere by passing `baseUrl` where
-`App.tsx` constructs the client:
+The server URL is **code-only**: there is no UI field and no environment
+variable. The client is constructed with no options at all, so it falls back to
+`DEFAULT_BASE_URL` in `src/opencast/client.ts` — `https://develop.opencast.org`.
+This is what `src/App.tsx` actually contains:
 
 ```ts
 const client = useMemo(
-  () => (import.meta.env.DEV
-    ? new SyntheticDualStreamClient({ baseUrl: 'https://opencast.example.org' })
-    : new OpencastClient({ baseUrl: 'https://opencast.example.org' })),
+  () => (import.meta.env.DEV ? new SyntheticDualStreamClient() : new OpencastClient()),
   [],
 )
 ```
+
+To point the player elsewhere, pass `baseUrl` to both constructors — that is
+the whole change:
+
+```ts
+const client = useMemo(
+  () => {
+    const options = { baseUrl: 'https://opencast.example.org' }   // <- added
+    return import.meta.env.DEV ? new SyntheticDualStreamClient(options) : new OpencastClient(options)
+  },
+  [],
+)
+```
+
+(`SyntheticDualStreamClient` extends `OpencastClient` and declares no
+constructor of its own, so it accepts the same options.) Vite's HMR picks the
+edit up without a restart.
 
 The server must send permissive CORS headers, since the browser talks to it
 directly and anonymously.
