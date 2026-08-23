@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "vite --host --port 5190 --strictPort",
     "build": "vite build",
-    "test": "echo \"no tests\" && exit 0"
+    "test": "vitest run"
   },
   "dependencies": {
     "@react-three/fiber": "^9.0.0",
