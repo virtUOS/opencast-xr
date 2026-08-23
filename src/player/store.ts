@@ -184,8 +184,9 @@ export interface PlayerStore {
    */
   getElement(flavorType: string): HTMLVideoElement | undefined
   /**
-   * Stops the store's own ticking interval, unregisters and destroys every
-   * open stream's element, and pauses the engine. Not part of the player's
+   * Stops the store's own ticking interval, cancels any `openEpisode` still in
+   * flight, unregisters and destroys every open stream's element, and pauses
+   * the engine. Not part of the player's
    * runtime behaviour (that's `toBrowse`, which additionally resets the
    * visible state to browse mode) - this is a teardown seam for whoever owns
    * the store's lifetime (a React unmount, HMR, or a test's `afterEach`) to
@@ -209,6 +210,22 @@ export function createPlayerStore(client: OpencastClient) {
   // not part of the interface this task produces (see task-9-brief.md).
   const elementsByFlavor = new Map<string, HTMLVideoElement>()
   let intervalHandle: ReturnType<typeof setInterval> | null = null
+  /**
+   * Race token for `openEpisode`, the store's only async action - the same
+   * discipline `windows/libraryState.ts` and `windows/seriesState.ts` already
+   * follow for their fetches. Bumped when an open STARTS, and by anything that
+   * invalidates one in flight (`toBrowse`, `dispose`); an open that comes back
+   * to find the counter moved on drops its result instead of applying it.
+   *
+   * Two things go wrong without it. Two tile clicks in quick succession
+   * (`openEpisode('B')`, `openEpisode('C')`) both run to completion, so the one
+   * whose LOOKUP happens to resolve last wins - the user can end up watching B
+   * after asking for C. And an open still in flight when the store is disposed
+   * (a React unmount, an HMR swap) goes on to append `<video>` elements to
+   * `document.body`, register them into a torn-down engine, and restart the
+   * 250 ms interval on a store nobody will ever dispose again.
+   */
+  let openGeneration = 0
 
   const store = createStore<PlayerStore>()((set, get) => {
     function teardownStreams(): void {
@@ -249,6 +266,8 @@ export function createPlayerStore(client: OpencastClient) {
         // needless teardown+rebuild of every stream's element.
         if (get().mode === 'player' && get().episode?.id === id) return
 
+        openGeneration += 1
+        const generation = openGeneration
         // Fetch BEFORE tearing anything down: a failed/unresolved lookup
         // (client.getEpisode/loadCaptions reject with OpencastError; there's
         // no error field on this store, so the rejection propagates to the
@@ -256,8 +275,13 @@ export function createPlayerStore(client: OpencastClient) {
         // leave whatever was already open (browse, or a previous episode)
         // untouched rather than mutated halfway.
         const episode = await get().client.getEpisode(id)
+        // Checked after EVERY await, not just the last one: the teardown below
+        // is destructive, so a stale round has to bail before it, not after.
+        // See openGeneration's doc comment.
+        if (generation !== openGeneration) return
         if (!episode) return
         const cues = await get().client.loadCaptions(episode)
+        if (generation !== openGeneration) return
         const sources = selectStreams(episode.tracks)
         // Every stream of the new recording starts open. NOTE for anyone
         // opening an episode from within player mode (that is what
@@ -415,6 +439,10 @@ export function createPlayerStore(client: OpencastClient) {
 
       toBrowse() {
         stopTicking()
+        // Invalidates any open still in flight: without this, a tile click
+        // followed quickly by „Bibliothek" would drag the user back into player
+        // mode when the lookup finally answered. See openGeneration's doc.
+        openGeneration += 1
         // Same reason as openEpisode: intent is sticky across an empty
         // registry, so leaving it playing here would autoplay the NEXT
         // episode the moment its first stream registers.
@@ -468,6 +496,10 @@ export function createPlayerStore(client: OpencastClient) {
 
       dispose() {
         stopTicking()
+        // Cancels an openEpisode still in flight - the case this seam exists
+        // for in the first place: without it the late arrival re-attaches
+        // elements and restarts the interval on a store already torn down.
+        openGeneration += 1
         get().setPlaying(false)
         teardownStreams()
       },

@@ -129,6 +129,37 @@ function makeClient() {
 }
 
 /**
+ * A client whose episode lookups hang until the test resolves them BY ID, in
+ * whatever order it likes - the only way to prove `openEpisode`'s race token
+ * actually decides the winner rather than "whoever resolved last" doing it.
+ * `settle(id)` answers one pending lookup from EPISODE_FIXTURES.
+ */
+function makeDeferredClient() {
+  const pending = new Map<string, (r: Response) => void>()
+  const fetchFn = vi.fn<FetchStub>((input) => {
+    const url = new URL(String(input))
+    const id = url.searchParams.get('id') ?? 'ep-1'
+    return new Promise<Response>((resolve) => pending.set(id, resolve))
+  })
+  return {
+    client: new OpencastClient({ fetchFn }),
+    /** Resolves the lookup for `id`; returns a promise for the microtasks it unblocks. */
+    async settle(id: string) {
+      const resolve = pending.get(id)
+      if (!resolve) throw new Error(`no pending episode lookup for ${id}`)
+      pending.delete(id)
+      resolve(jsonResponse(EPISODE_FIXTURES[id]))
+      // Two turns: one for the getEpisode await, one for the loadCaptions
+      // await that openEpisode does right after it (these fixtures carry no
+      // captions track, so it resolves without another fetch).
+      await Promise.resolve()
+      await Promise.resolve()
+    },
+    pendingIds: () => [...pending.keys()],
+  }
+}
+
+/**
  * jsdom's `<video>` reports `readyState` 0 and `currentTime` 0 and never
  * changes either (no decode happens), so any test about the engine's stall
  * threshold or session clock has to say what the element pretends to be. An
@@ -236,6 +267,107 @@ describe('createPlayerStore', () => {
       }
     })
 
+    describe('race token', () => {
+      it('the LAST requested episode wins, whatever order the lookups resolve in', async () => {
+        const { client, settle } = makeDeferredClient()
+        const store = makeStore(client)
+        const captionsSpy = vi.spyOn(client, 'loadCaptions')
+
+        // Two tile clicks in quick succession, neither awaited - exactly what
+        // the series window's episode list can produce.
+        const first = store.getState().openEpisode('ep-1')
+        const second = store.getState().openEpisode('ep-3')
+        // ...and the SECOND one comes back first, so "whoever resolves last
+        // wins" would hand the session to ep-1.
+        await settle('ep-3')
+        await settle('ep-1')
+        await Promise.all([first, second])
+
+        // The check after the FIRST await, specifically: a superseded round
+        // stops right there instead of going on to fetch captions it will
+        // never use (a real request against a real server).
+        expect(captionsSpy).toHaveBeenCalledTimes(1)
+        expect(captionsSpy.mock.calls[0][0].id).toBe('ep-3')
+        expect(store.getState().episode?.id).toBe('ep-3')
+        expect(store.getState().streams.map((s) => s.url)).toEqual([
+          'https://example.org/presenter-3.mp4',
+          'https://example.org/presentation-3.mp4',
+        ])
+        // The stale round must not have built elements either - two, not four.
+        expect(document.querySelectorAll('video')).toHaveLength(2)
+        for (const s of store.getState().streams) {
+          expect(store.getState().getElement(s.flavorType)?.getAttribute('src')).toBe(s.url)
+        }
+      })
+
+      it('dispose() mid-open cancels it: no elements, no registrations, no interval', async () => {
+        vi.useFakeTimers()
+        const { client, settle } = makeDeferredClient()
+        const store = makeStore(client)
+        const registerSpy = vi.spyOn(store.getState().engine, 'register')
+        const tickSpy = vi.spyOn(store.getState(), 'tickOnce')
+
+        const opening = store.getState().openEpisode('ep-1')
+        store.getState().dispose()
+        await settle('ep-1')
+        await opening
+
+        // Without the token this appended <video>s to document.body, registered
+        // them into a torn-down engine and restarted the 250 ms interval - on a
+        // store nobody would ever dispose again.
+        expect(document.querySelectorAll('video')).toHaveLength(0)
+        expect(registerSpy).not.toHaveBeenCalled()
+        expect(store.getState().mode).toBe('browse')
+        vi.advanceTimersByTime(1000)
+        expect(tickSpy).not.toHaveBeenCalled()
+
+        vi.useRealTimers()
+      })
+
+      it('dispose() BETWEEN the two lookups cancels it too (the check after the second await)', async () => {
+        // The episode lookup resolves immediately here, so the store is
+        // parked on the CAPTIONS await when it is disposed - the window the
+        // check after the first await cannot see.
+        const { client } = makeClient()
+        const store = makeStore(client)
+        let releaseCaptions = () => {}
+        const captionsAwaited = new Promise<void>((reached) => {
+          vi.spyOn(client, 'loadCaptions').mockImplementation(
+            () =>
+              new Promise((resolve) => {
+                releaseCaptions = () => resolve([])
+                reached()
+              }),
+          )
+        })
+        const registerSpy = vi.spyOn(store.getState().engine, 'register')
+
+        const opening = store.getState().openEpisode('ep-1')
+        await captionsAwaited
+        store.getState().dispose()
+        releaseCaptions()
+        await opening
+
+        expect(document.querySelectorAll('video')).toHaveLength(0)
+        expect(registerSpy).not.toHaveBeenCalled()
+        expect(store.getState().mode).toBe('browse')
+      })
+
+      it('toBrowse() mid-open cancels it, so a late arrival cannot drag the user back into the player', async () => {
+        const { client, settle } = makeDeferredClient()
+        const store = makeStore(client)
+
+        const opening = store.getState().openEpisode('ep-1')
+        store.getState().toBrowse()
+        await settle('ep-1')
+        await opening
+
+        expect(store.getState().mode).toBe('browse')
+        expect(store.getState().episode).toBeUndefined()
+        expect(store.getState().streams).toEqual([])
+        expect(document.querySelectorAll('video')).toHaveLength(0)
+      })
+    })
   })
 
   describe('closeStream / canClose', () => {
