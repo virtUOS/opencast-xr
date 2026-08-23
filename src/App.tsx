@@ -8,6 +8,7 @@ import { SHELL_RADIUS, xrStore } from './xrStore'
 import { VerificationHandle } from './verificationHandle'
 import { OpencastClient } from './opencast/client'
 import { createPlayerStore } from './player/store'
+import { LibraryWindow } from './windows/LibraryWindow'
 
 /**
  * Why WebXR is or isn't available, as a short line we can render on screen.
@@ -36,23 +37,6 @@ function describeXrEnvironment(): XrStatus | null {
     return { kind: 'unavailable', reason: 'navigator.xr missing — this browser exposes no WebXR API' }
   }
   return null
-}
-
-/**
- * Placeholder for browse mode. Task 11 replaces this with the real
- * `src/windows/LibraryWindow.tsx` (series/episode tile list backed by
- * `client.listSeries`/`listEpisodes`); this task only needs the two modes to
- * be visibly distinct on screen.
- */
-function LibraryWindow() {
-  return (
-    <Window id="library" title="Bibliothek" size={{ width: 44, height: 30 }}
-            position={{ azimuth: 0, elevation: 0 }}>
-      <Container flexGrow={1} flexDirection="column" alignItems="center" justifyContent="center" padding={10}>
-        <Text fontSize={16} color="#ffffff">Bibliothek (Platzhalter — Task 11)</Text>
-      </Container>
-    </Window>
-  )
 }
 
 /**
@@ -179,7 +163,7 @@ export function App() {
             // Arrange/Recenter/Exit-VR buttons with no app slot beside them.
             dockControls={undefined}
           >
-            {mode === 'browse' ? <LibraryWindow /> : <PlayerWindows />}
+            {mode === 'browse' ? <LibraryWindow store={playerStore} /> : <PlayerWindows />}
           </WindowShell>
         </XR>
       </Canvas>

@@ -59,7 +59,14 @@ export class OpencastClient {
     this.baseUrl = opts.baseUrl ?? DEFAULT_BASE_URL
     this.authorizeHook = opts.authorize ?? ((init) => init)
     this.resolveAssetUrlHook = opts.resolveAssetUrl ?? identity
-    this.fetchFn = opts.fetchFn ?? fetch
+    // Bound, not the bare reference: real Chrome's `fetch` is brand-checked
+    // against its native receiver (WindowOrWorkerGlobalScope) - calling it as
+    // `this.fetchFn(...)` with `this` being this OpencastClient instance
+    // throws "Failed to execute 'fetch' on 'Window': Illegal invocation".
+    // jsdom's fetch (used by every test in this file) doesn't enforce that
+    // check, which is why this shipped without a failing test - only caught
+    // live, against the real browser, during Task 11 verification.
+    this.fetchFn = opts.fetchFn ?? fetch.bind(globalThis)
   }
 
   /** Runs one authorized fetch against an absolute URL, throwing OpencastError on a non-ok response. */
