@@ -100,6 +100,34 @@ describe('SyncEngine: registration, master election, mute/volume discipline', ()
     engine.unregister('presenter')
     expect(engine.currentTime).toBe(12.5)
   })
+
+  it('(g) [fix C1] re-registering the CURRENT master under the same id, same object, does not mute it', () => {
+    const engine = new SyncEngine()
+    const master = new FakeVideo()
+    engine.register('master', master, 0)
+    expect(master.muted).toBe(false)
+
+    // A React ref re-firing, a StrictMode double-invoke, or anything else
+    // that calls register() again for the id that's already master.
+    engine.register('master', master, 0)
+
+    expect(engine.masterId).toBe('master')
+    expect(master.muted).toBe(false)
+  })
+
+  it('(h) [fix C1] re-registering the master id under a FRESH element (a swap) keeps it master, unmuted, at the master volume', () => {
+    const engine = new SyncEngine()
+    const original = new FakeVideo()
+    engine.register('master', original, 0)
+    engine.setVolume(0.3)
+
+    const replacement = new FakeVideo() // a brand new element under the same stable id
+    engine.register('master', replacement, 0)
+
+    expect(engine.masterId).toBe('master')
+    expect(replacement.muted).toBe(false)
+    expect(replacement.volume).toBe(0.3)
+  })
 })
 
 describe('SyncEngine: drift bands (tick)', () => {
@@ -175,6 +203,82 @@ describe('SyncEngine: drift bands (tick)', () => {
     expect(master.playbackRate).toBe(1)
     expect(master.currentTime).toBe(10) // untouched, not seeked to itself or anything else
   })
+
+  it(`(f) boundary: drift exactly at DRIFT_IGNORE_S = ${DRIFT_IGNORE_S} is still ignored (rate 1)`, () => {
+    const { engine, master, slave } = mkMasterAndSlave()
+    // Constructed as master - slave = DRIFT_IGNORE_S via a single negation,
+    // not a subtraction of two arbitrary floats, so the drift lands on
+    // exactly 0.05 with no floating-point rounding surprises at the boundary.
+    master.currentTime = DRIFT_IGNORE_S
+    slave.currentTime = 0
+
+    engine.tick()
+
+    expect(slave.playbackRate).toBe(1)
+    expect(slave.currentTime).toBe(0) // not seeked
+  })
+
+  it(`(g) boundary: drift exactly at DRIFT_SEEK_S = ${DRIFT_SEEK_S} already hard-seeks (inclusive)`, () => {
+    const { engine, master, slave } = mkMasterAndSlave()
+    master.currentTime = DRIFT_SEEK_S
+    slave.currentTime = 0
+
+    engine.tick()
+
+    expect(slave.currentTime).toBe(DRIFT_SEEK_S)
+    expect(slave.playbackRate).toBe(1)
+  })
+
+  it('(h) [fix I4] drift correction skips a slave paused independently of engine intent - no hard-seek storm on an idle element', () => {
+    const { engine, master, slave } = mkMasterAndSlave()
+    master.currentTime = 0
+    slave.currentTime = 0
+    slave.pause() // something outside the engine paused just this one stream
+
+    // The master keeps advancing every tick; without the fix each tick past
+    // DRIFT_SEEK_S would hard-seek the (idle, paused) slave.
+    for (let i = 0; i < 20; i++) {
+      master.advance(0.5) // master.paused is false, so this actually advances it
+      engine.tick()
+    }
+
+    expect(master.currentTime).toBe(10) // 20 * 0.5, sanity check the loop ran
+    expect(slave.currentTime).toBe(0) // never touched despite 10s of drift
+    expect(slave.playbackRate).toBe(1) // never touched either
+    expect(slave.paused).toBe(true) // still exactly as it was left
+
+    // Once resumed, the very next tick applies the normal bands - here, a
+    // hard seek, since drift (10s) is far past DRIFT_SEEK_S.
+    slave.play()
+    engine.tick()
+
+    expect(slave.currentTime).toBe(10)
+    expect(slave.playbackRate).toBe(1)
+  })
+
+  it('(i) [fix I5] a slave\'s corrective rate is preserved across a stall, and re-derives to the same value on recovery', () => {
+    const { engine, master, slave } = mkMasterAndSlave()
+    master.currentTime = 10
+    slave.currentTime = 10 - 0.2 // behind - CATCHUP_RATE band
+
+    engine.tick()
+    expect(slave.playbackRate).toBe(CATCHUP_RATE)
+
+    // A stall begins (unrelated to drift) - tick() pauses both before drift
+    // correction runs this cycle, so the rate set above must survive untouched.
+    slave.readyState = 1
+    engine.tick()
+    expect(slave.playbackRate).toBe(CATCHUP_RATE)
+    expect(master.paused).toBe(true)
+
+    // Recovery: elements resume, and because master/slave currentTime never
+    // moved while paused, the SAME drift re-derives the SAME rate.
+    slave.readyState = 4
+    engine.tick()
+
+    expect(slave.playbackRate).toBe(CATCHUP_RATE)
+    expect(slave.currentTime).toBeLessThan(master.currentTime) // still behind
+  })
 })
 
 describe('SyncEngine: play/pause/seek fan-out', () => {
@@ -236,6 +340,30 @@ describe('SyncEngine: play/pause/seek fan-out', () => {
     expect(master.paused).toBe(true)
     expect(slave.paused).toBe(true)
     expect(engine.playing).toBe(false)
+  })
+
+  it('(e) [fix I5] seek() resets every playbackRate to 1 and keeps currentTime as the last-known value once the registry empties', () => {
+    const engine = new SyncEngine()
+    const master = new FakeVideo()
+    const slave = new FakeVideo()
+    engine.register('master', master, 0)
+    engine.register('slave', slave, 1)
+    engine.play()
+    master.currentTime = 10
+    slave.currentTime = 10 - 0.2 // behind - would set CATCHUP_RATE
+    engine.tick()
+    expect(slave.playbackRate).toBe(CATCHUP_RATE)
+
+    engine.seek(50)
+
+    expect(master.currentTime).toBe(50)
+    expect(slave.currentTime).toBe(50)
+    expect(master.playbackRate).toBe(1)
+    expect(slave.playbackRate).toBe(1) // stale correction reset by the seek
+    expect(engine.currentTime).toBe(50)
+
+    engine.unregister('master')
+    expect(engine.currentTime).toBe(50) // last known, from the seek itself
   })
 })
 
@@ -354,5 +482,93 @@ describe('SyncEngine: stall detection and recovery', () => {
 
     expect(onStall).not.toHaveBeenCalled()
     expect(engine.playing).toBe(false)
+  })
+
+  it('(f) [fix C2] pause() during an active stall clears it (fires onStall(false)) so a later play() actually plays, without waiting for another tick()', () => {
+    const onStall = vi.fn()
+    const engine = new SyncEngine({ onStall })
+    const master = new FakeVideo()
+    const slave = new FakeVideo()
+    engine.register('master', master, 0)
+    engine.register('slave', slave, 1)
+
+    engine.play()
+    slave.readyState = 1
+    engine.tick() // stall begins
+    expect(onStall.mock.calls).toEqual([[true]])
+    expect(master.paused).toBe(true)
+
+    engine.pause() // must not leave `stalled` wedged true forever
+    expect(onStall.mock.calls).toEqual([[true], [false]])
+
+    slave.readyState = 4 // recovers while paused - no tick() would ever see this transition
+    engine.play()
+
+    // No further onStall calls: this was never a second stall/recovery
+    // cycle, just the ordinary pause -> play the caller asked for.
+    expect(onStall.mock.calls).toEqual([[true], [false]])
+    expect(master.paused).toBe(false)
+    expect(slave.paused).toBe(false)
+    expect(engine.playing).toBe(true)
+  })
+
+  it('(g) [fix I3] a video registered WHILE the engine is playing (no stall) starts playing immediately, not on some future tick()', () => {
+    const engine = new SyncEngine()
+    const master = new FakeVideo()
+    engine.register('master', master, 0)
+    engine.play()
+
+    const latecomer = new FakeVideo()
+    engine.register('latecomer', latecomer, 1)
+
+    expect(latecomer.paused).toBe(false)
+  })
+
+  it('(h) [fix I3] a video registered WHILE stalled is left paused during the stall, then resumed on recovery - not stuck forever', () => {
+    const onStall = vi.fn()
+    const engine = new SyncEngine({ onStall })
+    const master = new FakeVideo()
+    const slave = new FakeVideo()
+    engine.register('master', master, 0)
+    engine.register('slave', slave, 1)
+    engine.play()
+
+    slave.readyState = 1
+    engine.tick() // stall begins
+    expect(onStall.mock.calls).toEqual([[true]])
+
+    const newcomer = new FakeVideo()
+    engine.register('newcomer', newcomer, 2)
+    expect(newcomer.paused).toBe(true) // can't start it mid-stall
+
+    slave.readyState = 4
+    engine.tick() // stall clears
+
+    expect(onStall.mock.calls).toEqual([[true], [false]])
+    expect(master.paused).toBe(false)
+    expect(slave.paused).toBe(false)
+    expect(newcomer.paused).toBe(false) // would previously stay paused forever
+  })
+
+  it('(i) [fix I5] onStall fires exactly once per edge, not once per tick() while the state persists', () => {
+    const onStall = vi.fn()
+    const engine = new SyncEngine({ onStall })
+    const master = new FakeVideo()
+    const slave = new FakeVideo()
+    engine.register('master', master, 0)
+    engine.register('slave', slave, 1)
+    engine.play()
+
+    slave.readyState = 1
+    engine.tick()
+    engine.tick()
+    engine.tick()
+    expect(onStall.mock.calls).toEqual([[true]])
+
+    slave.readyState = 4
+    engine.tick()
+    engine.tick()
+    engine.tick()
+    expect(onStall.mock.calls).toEqual([[true], [false]])
   })
 })

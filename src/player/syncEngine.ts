@@ -59,14 +59,47 @@ export class SyncEngine {
   }
 
   register(id: string, video: VideoLike, preference: number): void {
+    // Capture the previous master's id/entry BEFORE mutating the map: if
+    // `id` re-registers the CURRENT master (a React ref re-firing, a
+    // StrictMode double-invoke, or an element swap under a stable id),
+    // `entries.set` below would otherwise overwrite the entry first and
+    // make the master compare itself against itself, landing in the
+    // else-branch and muting the only unmuted (audio-carrying) video.
+    const previousMasterId = this.currentMasterId
+    const currentMaster = previousMasterId ? this.entries.get(previousMasterId) : undefined
+    const reRegisteringMaster = id === previousMasterId
+
     this.entries.set(id, { video, preference })
 
-    const currentMaster = this.currentMasterId ? this.entries.get(this.currentMasterId) : undefined
-    if (!currentMaster || preference < currentMaster.preference) {
+    if (reRegisteringMaster) {
+      // Same id, still master: stay unmuted at the master volume. No
+      // election re-run and no onMasterChange re-fire - nothing changed.
+      video.muted = false
+      video.volume = this.masterVolume
+    } else if (!currentMaster || preference < currentMaster.preference) {
       this.promoteToMaster(id)
     } else {
       video.muted = true
     }
+
+    this.reconcileToIntent(id, video)
+  }
+
+  /**
+   * Brings a just-(re)registered video's element state in line with the
+   * engine's current intent, so a newcomer joining mid-playback doesn't sit
+   * paused forever waiting for the next explicit play()/tick(). While a
+   * stall is active it can't be started directly - added to pausedForStall
+   * instead, so exitStall's resume pass picks it up exactly like anything
+   * the stall itself paused.
+   */
+  private reconcileToIntent(id: string, video: VideoLike): void {
+    if (!this.intentPlaying) return
+    if (this.stalled) {
+      this.pausedForStall.add(id)
+      return
+    }
+    safePlay(video)
   }
 
   unregister(id: string): void {
@@ -102,17 +135,44 @@ export class SyncEngine {
 
   play(): void {
     this.intentPlaying = true
-    if (this.stalled) return // hold - the stall's own recovery path will resume what it paused
+    // Re-check right now rather than waiting for an external tick(): if a
+    // stall had already cleared (readyState recovered) while nothing was
+    // driving tick() - e.g. the caller paused, which stops the rAF/interval
+    // that would otherwise notice - this resolves it immediately instead of
+    // leaving playback wedged until some future tick() happens to run.
+    this.detectStall()
+    if (this.stalled) return // still genuinely stalled - the resume happens on exitStall, not here
     for (const { video } of this.entries.values()) safePlay(video)
   }
 
   pause(): void {
     this.intentPlaying = false
+    // Pausing ends any active stall too: "stalled" only means anything while
+    // the engine intends to play. Otherwise a stall entered while playing,
+    // followed by pause(), would wedge `stalled` true forever - detectStall()
+    // early-returns on !intentPlaying, so nothing would ever fire the exit
+    // edge or clear it, and a later play() would then see `stalled` still
+    // true and refuse to start anything.
+    if (this.stalled) {
+      this.stalled = false
+      this.events.onStall?.(false)
+    }
+    this.pausedForStall.clear()
     for (const { video } of this.entries.values()) video.pause()
   }
 
   seek(seconds: number): void {
-    for (const { video } of this.entries.values()) video.currentTime = seconds
+    for (const { video } of this.entries.values()) {
+      video.currentTime = seconds
+      // A hard seek makes any accumulated catchup/slowdown correction stale
+      // - everything is exactly at masterTime immediately after, so drift
+      // is zero and the rate belongs back at 1.
+      video.playbackRate = 1
+    }
+    // Keep the "last known" value current even with no master registered
+    // (or once it later becomes empty), matching the currentTime getter's
+    // fallback contract.
+    this.lastKnownTime = seconds
   }
 
   setVolume(v: number): void {
@@ -132,6 +192,15 @@ export class SyncEngine {
 
     for (const [id, entry] of this.entries) {
       if (id === this.currentMasterId) continue
+      // A slave paused independently of engine intent (e.g. the user
+      // paused just that stream) is idle, not lagging: correcting it would
+      // hard-seek it over and over as the playing master pulls away, purely
+      // to keep an element nobody's watching "in sync" - wasted seeks/range
+      // requests on a real <video>. Once it's resumed (paused flips back to
+      // false, however that happens), the very next tick applies the normal
+      // bands to it - typically a hard seek, since drift has usually grown
+      // past DRIFT_SEEK_S while it sat paused.
+      if (entry.video.paused) continue
       this.correctDrift(entry.video, masterTime)
     }
   }
