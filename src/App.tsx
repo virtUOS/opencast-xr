@@ -18,6 +18,8 @@ import { DockTransport } from './windows/DockTransport'
 import { ControlsWindow } from './windows/ControlsWindow'
 import { ChaptersWindow } from './windows/ChaptersWindow'
 import { SeriesWindow } from './windows/SeriesWindow'
+import { TranscriptWindow } from './windows/TranscriptWindow'
+import { SubtitleHud } from './windows/SubtitleHud'
 import { SyntheticDualStreamClient } from './dev/syntheticDualStream'
 
 /**
@@ -250,9 +252,16 @@ export function App() {
                     case. */}
                 <ChaptersWindow store={playerStore} />
                 <SeriesWindow store={playerStore} />
+                <TranscriptWindow store={playerStore} />
               </>
             )}
           </WindowShell>
+          {/* NOT inside <WindowShell> - a <HeadLocked> is not a window (see
+              SubtitleHud.tsx's own doc comment and sphere-shell's HeadLocked.tsx
+              doc comment: "mount it anywhere alongside <WindowShell>"). Renders
+              nothing itself while browsing (its own self-gate: no cues, no
+              seek preview outside player mode). */}
+          {mode === 'player' && <SubtitleHud store={playerStore} />}
         </XR>
       </Canvas>
     </div>
