@@ -71,10 +71,19 @@ export function ControlsWindow({ store }: { store: PlayerStoreApi }) {
 
   const [volume, setVolume] = useState(() => store.getState().engine.volume)
 
+  // Functional updater (code review minor, fix round 1): two clicks fired
+  // in the same React batch (e.g. a fast double-click, or two pointer
+  // events landing in one commit) would otherwise both close over the SAME
+  // `volume` value captured at render time and each compute `next` from
+  // it - the second click's `stepVolume` call would start from the
+  // pre-first-click volume, silently losing one whole 0.1 step. The
+  // updater form always sees the latest state, even across a batch.
   const applyVolumeStep = (deltaSteps: number) => {
-    const next = stepVolume(volume, deltaSteps)
-    store.getState().engine.setVolume(next)
-    setVolume(next)
+    setVolume((current) => {
+      const next = stepVolume(current, deltaSteps)
+      store.getState().engine.setVolume(next)
+      return next
+    })
   }
 
   // Defensive only: App.tsx mounts this exclusively in player mode, which

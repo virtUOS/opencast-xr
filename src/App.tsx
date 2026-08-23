@@ -1,3 +1,8 @@
+// This app's `@react-three/uikit` tree has hit several real, reproduced
+// library defects/quirks (a `hover={undefined}` reconciler crash, missing
+// glyphs for certain punctuation, a wrapped-line rendering limit, stale
+// `e.point` under pointer capture) - see `docs/UIKIT-NOTES.md` at the repo
+// root before spending time re-diagnosing one of these from scratch.
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Canvas } from '@react-three/fiber'
 import { XR } from '@react-three/xr'
