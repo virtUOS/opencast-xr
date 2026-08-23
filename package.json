@@ -1,0 +1,30 @@
+{
+  "name": "opencast-player",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host --port 5190 --strictPort",
+    "build": "vite build",
+    "test": "echo \"no tests\" && exit 0"
+  },
+  "dependencies": {
+    "@react-three/fiber": "^9.0.0",
+    "@react-three/uikit": "^1.0.74",
+    "@react-three/uikit-lucide": "^1.0.74",
+    "@react-three/xr": "^6.4.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "sphere-shell": "workspace:*",
+    "three": "^0.175.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.0",
+    "jsdom": "^26.0.0",
+    "typescript": "^5.8.0",
+    "vite": "^6.0.0",
+    "vite-plugin-mkcert": "^1.17.0",
+    "vitest": "^3.0.0"
+  }
+}
