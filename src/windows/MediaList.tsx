@@ -16,7 +16,34 @@ export interface MediaListProps {
   moreLabel?: string
   /** Shown instead of the tile column when `items` is empty. Required: an empty list with no explanation reads as broken, not empty. */
   emptyText: string
+  /**
+   * Id of one item to render as the current/active one - a fixed highlighted
+   * background instead of the ordinary resting/hover pair. Added for Task 14
+   * (ChaptersWindow's "segment containing currentTimeS", SeriesWindow's
+   * "current episode") as the minimal generic extension the brief asked for,
+   * rather than copying the tile idiom into each window.
+   *
+   * Purely visual - this component still calls `onSelect` for the active
+   * item exactly like any other. A caller that wants the active tile to be
+   * non-clickable (SeriesWindow's "current episode ... not clickable") has
+   * to decide that itself, in its own `onSelect`, before doing anything with
+   * the id: MediaList has no opinion on what "select" means to a caller, and
+   * ChaptersWindow's own spec has no such restriction (re-selecting the
+   * already-active segment is a valid "restart this chapter" seek).
+   *
+   * Hover for the active item is a fixed color equal to its own resting
+   * color (not omitted) - see `truncate`'s sibling gotcha, `docs/UIKIT-NOTES.md`
+   * entry 1: toggling `hover` between an object and `undefined` across
+   * renders is a reproduced uikit crash, so "no visible hover change" is
+   * encoded by matching values, the same fix `ControlsWindow.tsx`'s disabled
+   * subtitle toggle uses.
+   */
+  activeId?: string
 }
+
+const RESTING_BG = '#20202a'
+const HOVER_BG = '#2c2c3a'
+const ACTIVE_BG = '#3a4f7f'
 
 const TILE_IMAGE_W = 96
 const TILE_IMAGE_H = 54
@@ -45,25 +72,30 @@ const SUBTITLE_MAX_CHARS = 56
  * Reusable uikit tile list: a scrollable column of Image+two-line-Text tiles
  * with a hover cue, and an optional "Mehr laden" tail button. Used by
  * LibraryWindow at both the series and the episode level; SeriesWindow
- * (Task 14) is expected to reuse it unchanged - this component knows nothing
- * about series/episodes/playability, only about tiles.
+ * (Task 14) reuses it directly with no wrapper tile type of its own -
+ * ChaptersWindow (also Task 14) goes through it too, feeding it segment
+ * tiles built by `chaptersState.ts`. This component still knows nothing
+ * about series/episodes/segments/playability, only about tiles (plus, as of
+ * Task 14, which one of them is "active" - see `activeId`).
  */
-export function MediaList({ items, onSelect, onMore, moreLabel, emptyText }: MediaListProps) {
+export function MediaList({ items, onSelect, onMore, moreLabel, emptyText, activeId }: MediaListProps) {
   return (
     <Container flexGrow={1} flexDirection="column" overflow="scroll" padding={12} gap={8}>
       {items.length === 0 ? (
         <Text fontSize={14} color="#9a9aa5">{emptyText}</Text>
       ) : (
-        items.map((item) => (
+        items.map((item) => {
+          const active = item.id === activeId
+          return (
           <Container
             key={item.id}
             flexDirection="row"
             gap={10}
             padding={8}
             alignItems="center"
-            backgroundColor="#20202a"
+            backgroundColor={active ? ACTIVE_BG : RESTING_BG}
             borderRadius={6}
-            hover={{ backgroundColor: '#2c2c3a' }}
+            hover={{ backgroundColor: active ? ACTIVE_BG : HOVER_BG }}
             onClick={(e) => {
               e.stopPropagation()
               onSelect(item.id)
@@ -81,7 +113,8 @@ export function MediaList({ items, onSelect, onMore, moreLabel, emptyText }: Med
               )}
             </Container>
           </Container>
-        ))
+          )
+        })
       )}
       {onMore != null && (
         <Container

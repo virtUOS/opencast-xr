@@ -16,6 +16,8 @@ import { LibraryWindow } from './windows/LibraryWindow'
 import { VideoWindows } from './windows/VideoWindows'
 import { DockTransport } from './windows/DockTransport'
 import { ControlsWindow } from './windows/ControlsWindow'
+import { ChaptersWindow } from './windows/ChaptersWindow'
+import { SeriesWindow } from './windows/SeriesWindow'
 import { SyntheticDualStreamClient } from './dev/syntheticDualStream'
 
 /**
@@ -99,6 +101,19 @@ export function App() {
     [devClient],
   )
 
+  // Same pattern, same reasoning, as syntheticSecondStream above - see
+  // dev/syntheticDualStream.ts's `buildTestChapters` doc comment for why
+  // ChaptersWindow (Task 14) needs this at all (develop.opencast.org has no
+  // segmented episodes).
+  const [testChapters, setTestChapters] = useState(false)
+  const toggleTestChapters = useCallback(
+    (on: boolean) => {
+      if (devClient) devClient.testChapters = on
+      setTestChapters(on)
+    },
+    [devClient],
+  )
+
   const [xrStatus, setXrStatus] = useState<XrStatus>({ kind: 'checking' })
   const [enterError, setEnterError] = useState<string | null>(null)
 
@@ -173,6 +188,23 @@ export function App() {
             Zweiter Stream (Test)
           </label>
         )}
+        {devClient && (
+          <label
+            style={{
+              color: '#e8e8ee', background: '#22222a', border: '1px solid #44444e',
+              borderRadius: 4, padding: '6px 10px', font: '12px system-ui, sans-serif',
+              display: 'flex', gap: 6, alignItems: 'center',
+            }}
+            title="Fügt der nächsten geöffneten Aufzeichnung drei konstruierte Kapitelmarken (0s/60s/120s) hinzu — nur für Entwicklung, da develop.opencast.org keine segmentierten Aufzeichnungen hat."
+          >
+            <input
+              type="checkbox"
+              checked={testChapters}
+              onChange={(e) => toggleTestChapters(e.target.checked)}
+            />
+            Kapitel (Test)
+          </label>
+        )}
         {xrStatus.kind !== 'ready' && (
           <span
             style={{
@@ -211,6 +243,13 @@ export function App() {
               <>
                 <VideoWindows store={playerStore} />
                 <ControlsWindow store={playerStore} />
+                {/* Both self-gate on the open episode's own data (segments.length
+                    > 0 / seriesId != null) and render nothing otherwise - same
+                    "always mount, defensively bail" idiom ControlsWindow uses for
+                    the (structurally impossible, but still checked) missing-episode
+                    case. */}
+                <ChaptersWindow store={playerStore} />
+                <SeriesWindow store={playerStore} />
               </>
             )}
           </WindowShell>

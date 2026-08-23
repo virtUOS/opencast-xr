@@ -1,6 +1,6 @@
 import { OpencastClient } from '../opencast/client'
 import { selectStreams } from '../opencast/selectTracks'
-import type { Episode, OcTrack } from '../opencast/types'
+import type { Episode, OcSegment, OcTrack } from '../opencast/types'
 
 /**
  * DEVELOPMENT ONLY. Turns a single-video-flavor episode into a two-stream one.
@@ -51,22 +51,56 @@ export function syntheticDualStream(ep: Episode): Episode {
 }
 
 /**
- * DEVELOPMENT ONLY. An `OpencastClient` that can serve every episode through
- * `syntheticDualStream`, switchable at runtime.
+ * DEVELOPMENT ONLY. Start times (seconds) of the three chapter markers
+ * `buildTestChapters` injects - Task 14's brief spells them out explicitly.
+ */
+export const TEST_CHAPTER_STARTS_S = [0, 60, 120] as const
+
+/**
+ * DEVELOPMENT ONLY. develop.opencast.org's recordings never carry any
+ * `segments` (no OCR slide-segmentation configured on that instance), so
+ * `ChaptersWindow` (Task 14) has nothing to render there without help -
+ * the same problem `syntheticDualStream` solves for the sync engine's
+ * multi-stream behaviour. This fabricates three chapter markers at the
+ * fixed offsets above, each reusing the episode's OWN `previewUrl` as its
+ * tile image (there is no per-segment preview to reuse, since there are no
+ * real segments at all) and a distinguishing placeholder OCR text.
  *
- * A mutable field rather than a constructor flag on purpose: the player store
+ * A fixed 60s nominal duration per marker is fine here: `ChaptersWindow`'s
+ * highlight logic (`chaptersState.ts`'s `activeSegmentIndex`) only ever
+ * looks at `startMs`, never `durationMs` - see that function's own doc
+ * comment for why.
+ */
+export function buildTestChapters(ep: Episode): OcSegment[] {
+  return TEST_CHAPTER_STARTS_S.map((startS, i) => ({
+    startMs: startS * 1000,
+    durationMs: 60_000,
+    text: `Kapitel ${i + 1} (Test)`,
+    previewUrl: ep.previewUrl,
+  }))
+}
+
+/**
+ * DEVELOPMENT ONLY. An `OpencastClient` that can serve every episode through
+ * `syntheticDualStream` and/or `buildTestChapters`, each switchable at
+ * runtime and independently of the other.
+ *
+ * Mutable fields rather than constructor flags, on purpose: the player store
  * is created once per `<App>` mount and holds the client for its whole life
  * (see store.ts), so a flag that could only be set at construction time would
- * mean rebuilding the store - and tearing down playback - every time the dev
- * checkbox is ticked. The flag is read per `getEpisode` call, so it takes
- * effect on the NEXT episode opened, not retroactively on the one showing.
+ * mean rebuilding the store - and tearing down playback - every time a dev
+ * checkbox is ticked. Both flags are read per `getEpisode` call, so each
+ * takes effect on the NEXT episode opened, not retroactively on the one
+ * showing - same as `syntheticSecondStream` already worked before this.
  */
 export class SyntheticDualStreamClient extends OpencastClient {
   syntheticSecondStream = false
+  testChapters = false
 
   override async getEpisode(id: string): Promise<Episode | undefined> {
     const episode = await super.getEpisode(id)
-    if (!episode || !this.syntheticSecondStream) return episode
-    return syntheticDualStream(episode)
+    if (!episode) return episode
+    const withStream = this.syntheticSecondStream ? syntheticDualStream(episode) : episode
+    return this.testChapters ? { ...withStream, segments: buildTestChapters(withStream) } : withStream
   }
 }

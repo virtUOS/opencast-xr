@@ -3,7 +3,7 @@ import coffeeRunFixture from '../opencast/__fixtures__/episode-coffee-run.json'
 import { parseEpisodeResponse } from '../opencast/parse'
 import { selectStreams } from '../opencast/selectTracks'
 import type { Episode, OcTrack } from '../opencast/types'
-import { syntheticDualStream } from './syntheticDualStream'
+import { TEST_CHAPTER_STARTS_S, buildTestChapters, syntheticDualStream } from './syntheticDualStream'
 
 function coffeeRun(): Episode {
   const [episode] = parseEpisodeResponse(coffeeRunFixture)
@@ -96,5 +96,26 @@ describe('syntheticDualStream', () => {
       'https://example.org/high.mp4',
       'https://example.org/high.mp4',
     ])
+  })
+})
+
+describe('buildTestChapters', () => {
+  it('produces exactly three segments at the fixed 0/60/120s offsets', () => {
+    const ep = episodeWith([videoTrack({})])
+    const segments = buildTestChapters(ep)
+    expect(segments.map((s) => s.startMs)).toEqual(TEST_CHAPTER_STARTS_S.map((s) => s * 1000))
+  })
+
+  it('reuses the episode\'s own previewUrl on every segment', () => {
+    const ep = { ...episodeWith([videoTrack({})]), previewUrl: 'https://example.org/preview.jpg' }
+    for (const segment of buildTestChapters(ep)) {
+      expect(segment.previewUrl).toBe('https://example.org/preview.jpg')
+    }
+  })
+
+  it('gives each segment distinct, non-empty OCR-placeholder text', () => {
+    const texts = buildTestChapters(episodeWith([videoTrack({})])).map((s) => s.text)
+    expect(new Set(texts).size).toBe(texts.length)
+    expect(texts.every((t) => t.length > 0)).toBe(true)
   })
 })
