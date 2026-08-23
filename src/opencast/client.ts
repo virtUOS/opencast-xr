@@ -128,6 +128,13 @@ export class OpencastClient {
 
   /** Finds the best captions track, fetches and parses its VTT; [] if the episode has no captions track. */
   async loadCaptions(ep: Episode): Promise<Cue[]> {
+    // ep.tracks have already been through resolveAssetUrl (rewriteEpisode
+    // runs for every Episode this client hands out), so findCaptionsTrack's
+    // secondary ".vtt"-suffix heuristic (selectTracks.ts, captionsPreferenceScore)
+    // is scoring post-rewrite URLs here. A resolveAssetUrl that changes the
+    // path/suffix (e.g. a signed-URL redirect with no ".vtt" left in it)
+    // silently weakens that signal down to the mimetype check alone - still
+    // correct as long as mimetype is populated, just worth knowing about.
     const track = findCaptionsTrack(ep.tracks)
     if (!track) return []
     const res = await this.fetchAuthorized(track.url)

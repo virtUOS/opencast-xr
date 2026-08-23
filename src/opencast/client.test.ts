@@ -221,5 +221,37 @@ describe('OpencastClient', () => {
       const [, calledInit] = fetchFn.mock.calls[0]
       expect((calledInit as RequestInit).headers).toMatchObject({ Authorization: 'Bearer t' })
     })
+
+    it('end-to-end: an Episode from getEpisode (already rewritten by resolveAssetUrl) makes loadCaptions fetch the RESOLVED captions URL', async () => {
+      // This is the invariant the brief calls most defect-prone: the two
+      // loadCaptions tests above build their Episode straight from
+      // parseEpisodeResponse, bypassing rewriteEpisode entirely. Here the
+      // Episode instead comes from the client's own public getEpisode(),
+      // through a non-identity resolveAssetUrl, and that same Episode is
+      // what loadCaptions consumes - proving no unresolved URL can reach
+      // the captions fetch via the public API.
+      const resolveAssetUrl = (url: string) => `${url}?token=x`
+      const fetchFn = vi.fn<FetchStub>(async (input) => {
+        const url = String(input)
+        if (url.includes('/search/episode.json')) return jsonResponse(captionsEpisodeFixture)
+        if (url.includes('.vtt')) return textResponse(chaosVtt)
+        throw new Error(`unexpected fetch: ${url}`)
+      })
+      const client = new OpencastClient({ fetchFn, resolveAssetUrl })
+
+      const episode = await client.getEpisode('ID-was-ist-chaos')
+      expect(episode).toBeDefined()
+      const captionsTrack = episode?.tracks.find((t) => t.isCaptions)
+      expect(captionsTrack?.url.endsWith('?token=x')).toBe(true)
+
+      const cues = await client.loadCaptions(episode as NonNullable<typeof episode>)
+
+      expect(cues.length).toBeGreaterThan(0)
+      const vttCalls = fetchFn.mock.calls.filter(([input]) => String(input).includes('.vtt'))
+      expect(vttCalls).toHaveLength(1)
+      const [vttUrl] = vttCalls[0]
+      expect(String(vttUrl)).toBe(captionsTrack?.url)
+      expect(String(vttUrl).endsWith('?token=x')).toBe(true)
+    })
   })
 })
