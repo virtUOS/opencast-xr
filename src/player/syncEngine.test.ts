@@ -1,6 +1,13 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { VideoLike } from './videoLike'
-import { CATCHUP_RATE, DRIFT_IGNORE_S, DRIFT_SEEK_S, SLOWDOWN_RATE, SyncEngine } from './syncEngine'
+import {
+  CATCHUP_RATE,
+  DRIFT_IGNORE_S,
+  DRIFT_SEEK_S,
+  SLOWDOWN_RATE,
+  SyncEngine,
+  electMaster,
+} from './syncEngine'
 
 /**
  * Minimal VideoLike implementation for driving the engine with no DOM and no
@@ -44,6 +51,20 @@ function assertStallInvariant(engine: SyncEngine, videos: FakeVideo[]): void {
   if (engine.playing && isBuffering) {
     for (const v of videos) expect(v.paused).toBe(true)
   }
+}
+
+/**
+ * The audio-discipline invariant: across any handover, EXACTLY ONE of the
+ * currently-registered streams carries audio (unmuted), and it is the master -
+ * or none at all once the registry is empty. Pass only the ids that are
+ * registered right now; already-departed elements are asserted separately
+ * (they're muted on the way out, but they're no longer the engine's business).
+ */
+function assertAudioDiscipline(engine: SyncEngine, registered: Record<string, FakeVideo>): void {
+  const unmuted = Object.entries(registered)
+    .filter(([, v]) => !v.muted)
+    .map(([id]) => id)
+  expect(unmuted).toEqual(engine.masterId === null ? [] : [engine.masterId])
 }
 
 describe('SyncEngine: registration, master election, mute/volume discipline', () => {
@@ -656,6 +677,392 @@ describe('SyncEngine: stall detection and recovery', () => {
 
     expect(master.paused).toBe(false)
     expect(slave.paused).toBe(false)
+    expect(onStall.mock.calls).toEqual([[true], [false]])
+  })
+})
+
+describe('electMaster: election rule and tie-break', () => {
+  it('(a) picks the LOWEST preference, regardless of map order', () => {
+    const elected = electMaster(
+      new Map([
+        ['screen', { preference: 2 }],
+        ['presenter', { preference: 0 }],
+        ['presentation', { preference: 1 }],
+      ]),
+    )
+    expect(elected).toBe('presenter')
+  })
+
+  it('(b) breaks a preference tie by registration order: the earliest-registered candidate wins', () => {
+    const elected = electMaster(
+      new Map([
+        ['first', { preference: 1 }],
+        ['second', { preference: 1 }],
+      ]),
+    )
+    expect(elected).toBe('first')
+  })
+
+  it('(c) returns null for an empty registry', () => {
+    expect(electMaster(new Map())).toBeNull()
+  })
+
+  it('(d) negative and equal-to-zero preferences are ordered like any other number', () => {
+    const elected = electMaster(
+      new Map([
+        ['zero', { preference: 0 }],
+        ['negative', { preference: -1 }],
+      ]),
+    )
+    expect(elected).toBe('negative')
+  })
+})
+
+describe('SyncEngine: dynamic streams - master handover, rejoin, teardown', () => {
+  /** presenter (master, pref 0), presentation (1), screen (2), engine playing. */
+  function mkThree() {
+    const onMasterChange = vi.fn()
+    const onStall = vi.fn()
+    const engine = new SyncEngine({ onMasterChange, onStall })
+    const presenter = new FakeVideo()
+    const presentation = new FakeVideo()
+    const screen = new FakeVideo()
+    engine.register('presenter', presenter, 0)
+    engine.register('presentation', presentation, 1)
+    engine.register('screen', screen, 2)
+    engine.play()
+    onMasterChange.mockClear() // the initial election is Task 6's contract, tested there
+    return { engine, presenter, presentation, screen, onMasterChange, onStall }
+  }
+
+  it('(a) closing the master hands over to the next preference: event fired, audio moved, position continuous', () => {
+    const { engine, presenter, presentation, screen, onMasterChange } = mkThree()
+
+    // 30s of ordinary lock-step playback before the master goes away.
+    for (let i = 0; i < 60; i++) {
+      presenter.advance(0.5)
+      presentation.advance(0.5)
+      screen.advance(0.5)
+      engine.tick()
+    }
+    const referenceTime = engine.currentTime
+    expect(referenceTime).toBeCloseTo(30, 6)
+
+    engine.unregister('presenter')
+
+    expect(engine.masterId).toBe('presentation')
+    expect(onMasterChange.mock.calls).toEqual([['presentation']]) // exactly one event, no null in between
+    expect(presentation.muted).toBe(false)
+    expect(screen.muted).toBe(true)
+    expect(Math.abs(presentation.currentTime - referenceTime)).toBeLessThanOrEqual(0.05)
+    expect(presentation.paused).toBe(false) // the new clock is running
+    assertAudioDiscipline(engine, { presentation, screen })
+  })
+
+  it('(b) the departing master is muted on the way out, so a lingering element cannot double up audio', () => {
+    const { engine, presenter, presentation, screen } = mkThree()
+
+    engine.unregister('presenter')
+
+    expect(presenter.muted).toBe(true)
+    assertAudioDiscipline(engine, { presentation, screen })
+  })
+
+  it(`(c) handover seeks the new master to the captured reference time when drift exceeds DRIFT_IGNORE_S = ${DRIFT_IGNORE_S}`, () => {
+    const { engine, presenter, presentation } = mkThree()
+    presenter.currentTime = 30
+    presentation.currentTime = 29.4 // 0.6s behind - past the ignore band
+
+    engine.unregister('presenter')
+
+    expect(presentation.currentTime).toBe(30)
+    expect(presentation.playbackRate).toBe(1)
+  })
+
+  it('(d) handover does NOT seek the new master when drift is inside the ignore band', () => {
+    const { engine, presenter, presentation } = mkThree()
+    presenter.currentTime = 30
+    presentation.currentTime = 30 - 0.03
+    const before = presentation.currentTime
+
+    engine.unregister('presenter')
+
+    expect(presentation.currentTime).toBe(before) // untouched: no needless seek
+  })
+
+  it(`(e) boundary: drift exactly at DRIFT_IGNORE_S = ${DRIFT_IGNORE_S} is still no seek (strictly greater only)`, () => {
+    const { engine, presenter, presentation } = mkThree()
+    // Single negation, not a float subtraction - see drift-band test (f).
+    presenter.currentTime = DRIFT_IGNORE_S
+    presentation.currentTime = 0
+
+    engine.unregister('presenter')
+
+    expect(presentation.currentTime).toBe(0)
+  })
+
+  it('(f) the promoted master carries the engine volume and drops any corrective playbackRate it had as a slave', () => {
+    const { engine, presenter, presentation } = mkThree()
+    engine.setVolume(0.4)
+    presenter.currentTime = 10
+    presentation.currentTime = 10 - 0.2 // behind -> CATCHUP_RATE
+    engine.tick()
+    expect(presentation.playbackRate).toBe(CATCHUP_RATE)
+
+    // Nearly caught up again, so the handover does NOT seek - the promotion
+    // itself is the only thing that can drop the stale corrective rate here.
+    // Nothing else ever would: the master is never rate-corrected, so a
+    // promoted slave would run the whole session 5% fast forever.
+    presentation.currentTime = 10 - 0.02
+
+    engine.unregister('presenter')
+
+    expect(engine.masterId).toBe('presentation')
+    expect(presentation.volume).toBe(0.4)
+    expect(presentation.currentTime).toBe(10 - 0.02) // no seek: inside the ignore band
+    expect(presentation.playbackRate).toBe(1)
+  })
+
+  it('(g) the new master is never drift-corrected afterwards; the remaining slave is corrected against it', () => {
+    const { engine, presenter, presentation, screen } = mkThree()
+    presenter.currentTime = 10
+    presentation.currentTime = 10
+    screen.currentTime = 10
+    engine.unregister('presenter')
+    expect(engine.masterId).toBe('presentation')
+
+    screen.currentTime = 10 - 0.8 // far behind the NEW master
+    engine.tick()
+
+    expect(presentation.currentTime).toBe(10) // master untouched
+    expect(presentation.playbackRate).toBe(1)
+    expect(screen.currentTime).toBe(10) // slave hard-seeked to the new master's time
+  })
+
+  it('(h) preference ties in a handover are broken by registration order (earliest wins)', () => {
+    const onMasterChange = vi.fn()
+    const engine = new SyncEngine({ onMasterChange })
+    const master = new FakeVideo()
+    const early = new FakeVideo()
+    const late = new FakeVideo()
+    engine.register('master', master, 0)
+    engine.register('early', early, 1)
+    engine.register('late', late, 1) // same preference, registered later
+    onMasterChange.mockClear()
+
+    engine.unregister('master')
+
+    expect(engine.masterId).toBe('early')
+    expect(onMasterChange.mock.calls).toEqual([['early']])
+    assertAudioDiscipline(engine, { early, late })
+  })
+
+  it('(i) promotion resumes a stream that was paused independently: the master is the clock', () => {
+    const { engine, presentation } = mkThree()
+    presentation.pause() // something outside the engine paused just this stream
+
+    engine.unregister('presenter')
+
+    expect(engine.masterId).toBe('presentation')
+    expect(presentation.paused).toBe(false) // a paused master would freeze the whole session
+  })
+
+  it('(j) a returning stream is seeked to master time BEFORE it participates, and rejoins muted', () => {
+    const { engine, presenter, presentation, onMasterChange } = mkThree()
+
+    engine.unregister('presentation')
+    expect(engine.masterId).toBe('presenter') // unregistering a slave never re-elects
+    expect(onMasterChange).not.toHaveBeenCalled()
+
+    presenter.currentTime = 30 // master ran on for 30s while the stream was away
+    presentation.currentTime = 0 // a fresh element (or one torn down and rebuilt)
+    presentation.playbackRate = CATCHUP_RATE // a stale correction from its previous life
+
+    engine.register('presentation', presentation, 1)
+
+    expect(Math.abs(presentation.currentTime - 30)).toBeLessThanOrEqual(0.05)
+    expect(presentation.playbackRate).toBe(1) // the align-seek clears the stale rate
+    expect(presentation.muted).toBe(true)
+    expect(presentation.paused).toBe(false) // intent is playing, so it joins playing
+    expect(engine.masterId).toBe('presenter')
+    expect(onMasterChange).not.toHaveBeenCalled() // rejoining a slave changes nothing
+  })
+
+  it('(k) a returning stream with a BETTER preference takes over as master at the old master time', () => {
+    const onMasterChange = vi.fn()
+    const engine = new SyncEngine({ onMasterChange })
+    const screen = new FakeVideo()
+    engine.register('screen', screen, 2)
+    engine.play()
+    screen.currentTime = 30
+    onMasterChange.mockClear()
+
+    const presenter = new FakeVideo() // pref 0, arrives late, currentTime 0
+    engine.register('presenter', presenter, 0)
+
+    expect(engine.masterId).toBe('presenter')
+    expect(onMasterChange.mock.calls).toEqual([['presenter']])
+    expect(presenter.currentTime).toBe(30) // continuity: no jump back to 0
+    assertAudioDiscipline(engine, { screen, presenter })
+  })
+
+  it('(l) unregistering the LAST stream nulls the master but preserves currentTime for a later resume', () => {
+    const { engine, presenter, presentation, screen, onMasterChange } = mkThree()
+    engine.unregister('screen')
+    engine.unregister('presentation')
+    presenter.currentTime = 42
+    onMasterChange.mockClear()
+
+    engine.unregister('presenter')
+
+    expect(engine.masterId).toBeNull()
+    expect(onMasterChange.mock.calls).toEqual([[null]])
+    expect(engine.currentTime).toBe(42)
+    expect(presenter.muted).toBe(true)
+    expect(presentation.muted).toBe(true)
+    expect(screen.muted).toBe(true)
+
+    // Much later, a stream comes back: it resumes at the preserved position.
+    const fresh = new FakeVideo()
+    engine.register('presenter', fresh, 0)
+
+    expect(engine.masterId).toBe('presenter')
+    expect(onMasterChange.mock.calls).toEqual([[null], ['presenter']])
+    expect(fresh.currentTime).toBe(42)
+    expect(fresh.muted).toBe(false)
+    assertAudioDiscipline(engine, { presenter: fresh })
+  })
+
+  it('(m) the FIRST registration on a fresh engine keeps the element position: there is nothing to resume to', () => {
+    const engine = new SyncEngine()
+    const video = new FakeVideo()
+    video.currentTime = 12 // e.g. the app pre-positioned the element
+
+    engine.register('only', video, 0)
+
+    expect(video.currentTime).toBe(12)
+    expect(engine.currentTime).toBe(12)
+  })
+
+  it('(n) unregistering an unknown id is a no-op and never throws', () => {
+    const { engine, presenter, presentation, screen, onMasterChange, onStall } = mkThree()
+
+    expect(() => engine.unregister('does-not-exist')).not.toThrow()
+
+    expect(engine.masterId).toBe('presenter')
+    expect(onMasterChange).not.toHaveBeenCalled()
+    expect(onStall).not.toHaveBeenCalled()
+    expect(presenter.muted).toBe(false)
+    expect(presenter.paused).toBe(false)
+    assertAudioDiscipline(engine, { presenter, presentation, screen })
+
+    // Also fine on a completely empty engine, twice over.
+    const empty = new SyncEngine()
+    expect(() => empty.unregister('ghost')).not.toThrow()
+    expect(() => empty.unregister('ghost')).not.toThrow()
+    expect(empty.masterId).toBeNull()
+  })
+
+  it('(o) stalled handover, the DEPARTING master was the buffering one: removal resolves the stall', () => {
+    const { engine, presenter, presentation, screen, onStall } = mkThree()
+    presenter.readyState = 1 // the master itself is buffering
+    engine.tick()
+    expect(onStall.mock.calls).toEqual([[true]])
+    assertStallInvariant(engine, [presenter, presentation, screen])
+
+    engine.unregister('presenter')
+
+    expect(engine.masterId).toBe('presentation')
+    expect(presentation.muted).toBe(false)
+    expect(presentation.paused).toBe(false) // nothing is buffering any more
+    expect(screen.paused).toBe(false)
+    expect(onStall.mock.calls).toEqual([[true], [false]])
+    expect(engine.playing).toBe(true)
+    assertStallInvariant(engine, [presentation, screen])
+    assertAudioDiscipline(engine, { presentation, screen })
+  })
+
+  it('(p) stalled handover, a REMAINING stream is buffering: the new master is promoted but stays paused', () => {
+    const { engine, presenter, presentation, screen, onStall } = mkThree()
+    screen.readyState = 1 // a stream that stays registered is the buffering one
+    engine.tick()
+    expect(onStall.mock.calls).toEqual([[true]])
+
+    engine.unregister('presenter')
+
+    expect(engine.masterId).toBe('presentation')
+    expect(presentation.muted).toBe(false) // audio moves immediately
+    expect(presentation.paused).toBe(true) // but the stall still holds everything
+    expect(onStall.mock.calls).toEqual([[true]]) // no spurious exit edge
+    assertStallInvariant(engine, [presentation, screen])
+    assertAudioDiscipline(engine, { presentation, screen })
+
+    screen.readyState = 4
+    engine.tick()
+
+    expect(presentation.paused).toBe(false) // the promoted master is resumed, not stranded
+    expect(screen.paused).toBe(false)
+    expect(onStall.mock.calls).toEqual([[true], [false]])
+    assertAudioDiscipline(engine, { presentation, screen })
+  })
+
+  it('(q) audio discipline and the "non-empty registry has a master" invariant hold across a full teardown chain', () => {
+    const { engine, presenter, presentation, screen } = mkThree()
+    assertAudioDiscipline(engine, { presenter, presentation, screen })
+
+    engine.unregister('presenter')
+    expect(engine.masterId).toBe('presentation')
+    assertAudioDiscipline(engine, { presentation, screen })
+
+    engine.unregister('presentation')
+    expect(engine.masterId).toBe('screen')
+    assertAudioDiscipline(engine, { screen })
+
+    engine.unregister('screen')
+    expect(engine.masterId).toBeNull()
+    assertAudioDiscipline(engine, {})
+  })
+
+  it('(r) handover while the engine intent is PAUSED promotes without starting anything', () => {
+    const onMasterChange = vi.fn()
+    const engine = new SyncEngine({ onMasterChange })
+    const master = new FakeVideo()
+    const slave = new FakeVideo()
+    engine.register('master', master, 0)
+    engine.register('slave', slave, 1)
+    engine.play()
+    master.currentTime = 20
+    slave.currentTime = 20
+    engine.pause()
+    onMasterChange.mockClear()
+
+    engine.unregister('master')
+
+    expect(engine.masterId).toBe('slave')
+    expect(onMasterChange.mock.calls).toEqual([['slave']])
+    expect(slave.muted).toBe(false)
+    expect(slave.paused).toBe(true) // intent is paused: promotion must not start playback
+    expect(engine.playing).toBe(false)
+    expect(engine.currentTime).toBe(20)
+  })
+
+  it('(s) handover into a successor that is itself under-buffered enters a stall instead of running it dry', () => {
+    const { engine, presentation, screen, onStall } = mkThree()
+    presentation.readyState = 1 // the successor-to-be is the buffering one
+    expect(onStall).not.toHaveBeenCalled() // no tick() yet, so no stall is active
+
+    engine.unregister('presenter')
+
+    expect(engine.masterId).toBe('presentation')
+    expect(presentation.muted).toBe(false)
+    expect(onStall.mock.calls).toEqual([[true]]) // promotion itself surfaced the stall
+    assertStallInvariant(engine, [presentation, screen])
+
+    presentation.readyState = 4
+    engine.tick()
+
+    expect(presentation.paused).toBe(false)
+    expect(screen.paused).toBe(false)
     expect(onStall.mock.calls).toEqual([[true], [false]])
   })
 })
