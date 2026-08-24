@@ -4,7 +4,13 @@ import { Container, Text } from '@react-three/uikit'
 import { Window } from 'sphere-shell'
 import type { PlayerStoreApi } from '../player/store'
 import { MediaList } from './MediaList'
-import { SINGLES_TILE_ID, createLibraryState, seriesTiles, toEpisodeTile } from './libraryState'
+import {
+  SINGLES_TILE_ID,
+  createLibraryState,
+  scopeHeaderLabel,
+  seriesTiles,
+  toEpisodeTile,
+} from './libraryState'
 
 const RETRY_LABEL = 'Erneut versuchen'
 // Plain ASCII "<", not "‹" (U+2039): live verification showed uikit's
@@ -160,14 +166,15 @@ export function LibraryWindow({ store }: { store: PlayerStoreApi }) {
                 <Text fontSize={13} color="#cfd8ff">{BACK_LABEL}</Text>
               </Container>
               {/* Which scope this level-2 list actually is. `EpisodeScope.title`
-                  has been carried since Task 11 without ever being rendered,
+                  had been carried since Task 11 without ever being rendered,
                   and the dock breadcrumb made that a real gap: arriving here
                   straight from a „Reihe" crumb, „< Zurück" alone does not say
                   which series you landed in. The dock passes the UNtruncated
-                  title for exactly this line. */}
-              <Text fontSize={13} color="#9a9aa5">
-                {level.scope.type === 'series' ? level.scope.title : 'Einzelaufzeichnungen'}
-              </Text>
+                  title for exactly this line - and `scopeHeaderLabel` is what
+                  cuts it to one line, like every other string this app renders
+                  (see its doc comment for the uikit defect that makes that
+                  mandatory rather than cosmetic). */}
+              <Text fontSize={13} color="#9a9aa5">{scopeHeaderLabel(level.scope)}</Text>
             </Container>
             {openError && (
               <Container flexDirection="row" alignItems="center" padding={10} gap={10} backgroundColor="#3a2028">

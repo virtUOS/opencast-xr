@@ -1,11 +1,14 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { Episode, OcTrack, Series } from '../opencast/types'
 import {
+  SCOPE_HEADER_MAX_CHARS,
   SINGLES_TILE_ID,
   createLibraryState,
   formatDuration,
+  scopeHeaderLabel,
   seriesTiles,
   toEpisodeTile,
+  type EpisodeScope,
   type LibraryClient,
 } from './libraryState'
 
@@ -123,6 +126,60 @@ describe('seriesTiles', () => {
 
   it('still includes the singles tile when there are no real series', () => {
     expect(seriesTiles([])).toEqual([{ id: SINGLES_TILE_ID, title: 'Einzelaufzeichnungen' }])
+  })
+})
+
+// Re-review finding: the level-2 header was the one string in this app going
+// into a <Text> untruncated, which is exactly the precondition for uikit
+// 1.0.74's many-wrapped-lines defect that MediaList's own `truncate` documents.
+describe('scopeHeaderLabel', () => {
+  const series = (title: string): EpisodeScope => ({ type: 'series', sid: 's1', title })
+
+  it('is the series title for a series scope', () => {
+    expect(scopeHeaderLabel(series('AV-Portal Content'))).toBe('AV-Portal Content')
+  })
+
+  it('is the singles label for the singles scope, not a second copy of the string', () => {
+    // Same literal seriesTiles uses for the level-1 tile - one owner, so the
+    // header and the tile cannot drift apart.
+    expect(scopeHeaderLabel({ type: 'singles' })).toBe('Einzelaufzeichnungen')
+    expect(scopeHeaderLabel({ type: 'singles' })).toBe(seriesTiles([])[0].title)
+  })
+
+  it('TRUNCATES a long series title to one line, with plain ASCII dots', () => {
+    const long =
+      'Einfuehrung in die Theoretische Informatik, Fachbereich Mathematik/Informatik, Wintersemester 2026/27'
+    const label = scopeHeaderLabel(series(long))
+    expect(label).toHaveLength(SCOPE_HEADER_MAX_CHARS)
+    expect(label.endsWith('...')).toBe(true)
+    expect(label.startsWith('Einfuehrung in die Theoretische Informatik')).toBe(true)
+  })
+
+  it('leaves a title exactly at the limit alone, and cuts one past it', () => {
+    const exact = 'x'.repeat(SCOPE_HEADER_MAX_CHARS)
+    expect(scopeHeaderLabel(series(exact))).toBe(exact)
+    expect(scopeHeaderLabel(series('x'.repeat(SCOPE_HEADER_MAX_CHARS + 1)))).toHaveLength(
+      SCOPE_HEADER_MAX_CHARS,
+    )
+  })
+
+  it('never returns more than the limit, whatever it is handed', () => {
+    for (const title of ['', 'a', 'y'.repeat(5000)]) {
+      expect(scopeHeaderLabel(series(title)).length).toBeLessThanOrEqual(SCOPE_HEADER_MAX_CHARS)
+    }
+  })
+
+  it('stays inside the glyphs uikit 1.0.74 default font can draw', () => {
+    // Same constraint as BACK_LABEL and the escape hint: diacritics render,
+    // typographic punctuation comes out as tofu boxes.
+    expect(scopeHeaderLabel(series('z'.repeat(200)))).not.toMatch(/[‹›„“”…·—]/)
+  })
+
+  it('is more generous than a MediaList tile title, since it owns a whole row', () => {
+    // Guards the intent, not the number: a future edit that "tidies" this down
+    // to a tile-sized cut would silently shorten real series names for no
+    // reason - the header shares its row only with „< Zurück".
+    expect(SCOPE_HEADER_MAX_CHARS).toBeGreaterThan(42)
   })
 })
 

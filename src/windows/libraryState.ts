@@ -154,6 +154,45 @@ export function toEpisodeTile(ep: Episode): EpisodeTile {
   return { id: ep.id, title: ep.title, subtitle, imageUrl: ep.previewUrl, playable }
 }
 
+/**
+ * How long the level-2 header may render before being truncated. Generous
+ * compared with `MediaList`'s own 42-character tile titles, and deliberately
+ * so: the header has a whole ~50-degree-wide window row to itself (sharing it
+ * only with „< Zurück"), whereas a tile title sits beside a preview image. At
+ * fontSize 13 in that width, 70 characters still comfortably makes ONE line -
+ * which is the only property that actually matters here.
+ */
+export const SCOPE_HEADER_MAX_CHARS = 70
+
+/**
+ * What `LibraryWindow`'s level-2 header says: which scope the episode list
+ * being shown actually is.
+ *
+ * TRUNCATED, like every other string this app puts into a `<Text>`. The first
+ * cut of this header (the dock-breadcrumb round) rendered `scope.title` raw,
+ * which made it the one place in the codebase departing from the safeguard
+ * `MediaList`'s own `truncate` documents at length: uikit 1.0.74's `Text` has a
+ * MANY-WRAPPED-LINES defect, and there is no width-aware ellipsis in this
+ * version, so a plain character-count cut applied BEFORE the string reaches
+ * `<Text>` is how the defect's precondition is kept from ever arising. A
+ * moderately long real series title ("Einführung in die ..." with a
+ * department and a term appended is entirely normal in an Opencast catalogue)
+ * would have wrapped or hard-clipped. `breadcrumbState.ts` already truncates
+ * this SAME field to 30 characters for the dock's much narrower row.
+ *
+ * Also the single home of the singles label: the header used to repeat the
+ * „Einzelaufzeichnungen" literal that `SINGLES_TITLE` above already owns, so
+ * the two could drift.
+ *
+ * "..." (three ASCII periods), not "…" - `docs/UIKIT-NOTES.md` entry 3.
+ */
+export function scopeHeaderLabel(scope: EpisodeScope): string {
+  const title = scope.type === 'series' ? scope.title : SINGLES_TITLE
+  return title.length > SCOPE_HEADER_MAX_CHARS
+    ? `${title.slice(0, SCOPE_HEADER_MAX_CHARS - 3)}...`
+    : title
+}
+
 export function createLibraryState(client: LibraryClient) {
   const store = createStore<LibraryState>()((set, get) => {
     // Set once an attempt fails, cleared once one succeeds. Re-invoking one IS
