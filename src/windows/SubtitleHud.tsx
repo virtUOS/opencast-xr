@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useMemo, type ReactNode } from 'react'
 import { useStore } from 'zustand'
 import { Container, Text } from '@react-three/uikit'
 import { HeadLocked } from 'sphere-shell'
@@ -6,8 +6,16 @@ import type { PlayerStoreApi } from '../player/store'
 import { activeCue, seekFeedback } from './subtitleHudState'
 import { normalizeCueText } from './transcriptState'
 
-const SUBTITLE_BG = '#0c0c12'
-const FEEDBACK_BG = '#14141c'
+const HUD_BG = '#000000'
+/**
+ * How dark the caption backdrop is - the user's „nur leicht abgedunkelt, aber
+ * nicht schwarz". The panel used to be a near-opaque near-black slab, which
+ * legibility-wise was safe and in practice punched a black hole through the
+ * middle of whatever was being watched. 0.4 was picked by eye against a bright
+ * video frame: enough to keep white text readable over near-white content,
+ * light enough that the picture stays visible through it.
+ */
+const HUD_BG_OPACITY = 0.4
 const SUBTITLE_MAX_WIDTH_PX = 520
 
 /**
@@ -25,8 +33,13 @@ const SUBTITLE_MAX_WIDTH_PX = 520
  *   `subtitleHudState.ts`'s `activeCue`, built on `transcriptState.ts`'s
  *   `activeCueIndex` - reused, not re-derived), shown while `subtitlesOn` and
  *   the episode actually has cues. Font size 22 - comfortably above the
- *   brief's ">= 20px equivalent" floor - on a dark, near-opaque backdrop
- *   panel for legibility against arbitrary scene content behind it.
+ *   brief's ">= 20px equivalent" floor - over a lightly darkening translucent
+ *   backdrop (`HudPanel`, `HUD_BG_OPACITY`) that keeps white text readable
+ *   without blacking out the picture behind it.
+ *
+ * Its world size is user-adjustable from the dock (`subtitleScale` on the
+ * store, `<group scale>` here) - see `subtitleHudState.ts`'s
+ * `SUBTITLE_SCALE_STEPS`.
  * - **Seek feedback**: while the timeline is being dragged
  *   (`seekPreviewS !== null`), the target `M:SS`/`H:MM:SS` plus - when the
  *   episode has segments - the chapter/segment title there
@@ -81,6 +94,58 @@ const SUBTITLE_MAX_WIDTH_PX = 520
  * primary content" - for a camera-specific artifact elsewhere). Flagged for
  * whoever next drives real hardware.
  */
+/**
+ * A HUD panel whose BACKDROP is translucent while its content stays fully
+ * opaque.
+ *
+ * The obvious spelling - `opacity` on the panel `Container` itself - does not
+ * work for this: `opacity` is one of `@pmndrs/uikit` 1.0.74's INHERITED
+ * properties (`dist/properties/inheritance.js` lists it), so it dims the
+ * caption text along with the panel behind it and the result is grey text on a
+ * grey wash instead of white text on a light darkening. (There is no
+ * `backgroundOpacity` prop in this version either - grep of the installed
+ * package finds that name only as a local in the panel material's generated
+ * shader, never in `properties/schema.d.ts`. `opacity` IS the background
+ * opacity, for a Container.)
+ *
+ * So the backdrop is its own absolutely-positioned child, stretched to the
+ * padded box, carrying the `opacity` alone - a sibling of the content rather
+ * than its ancestor, which puts it outside the inheritance chain by
+ * construction rather than by an override that a later edit could undo.
+ * `pointerEvents="none"` on it is belt-and-braces: `<HeadLocked>`'s own root
+ * already makes the whole HUD hit-transparent.
+ */
+function HudPanel({
+  paddingX,
+  paddingY,
+  borderRadius,
+  maxWidth,
+  children,
+}: {
+  paddingX: number
+  paddingY: number
+  borderRadius: number
+  maxWidth?: number
+  children: ReactNode
+}) {
+  return (
+    <Container paddingX={paddingX} paddingY={paddingY} maxWidth={maxWidth} alignItems="center">
+      <Container
+        positionType="absolute"
+        positionLeft={0}
+        positionRight={0}
+        positionTop={0}
+        positionBottom={0}
+        backgroundColor={HUD_BG}
+        opacity={HUD_BG_OPACITY}
+        borderRadius={borderRadius}
+        pointerEvents="none"
+      />
+      {children}
+    </Container>
+  )
+}
+
 export function SubtitleHud({ store }: { store: PlayerStoreApi }) {
   const cues = useStore(store, (s) => s.cues)
   const subtitlesOn = useStore(store, (s) => s.subtitlesOn)
@@ -88,6 +153,7 @@ export function SubtitleHud({ store }: { store: PlayerStoreApi }) {
   const seekPreviewS = useStore(store, (s) => s.seekPreviewS)
   const segments = useStore(store, (s) => s.episode?.segments)
   const durationMs = useStore(store, (s) => s.episode?.durationMs ?? 0)
+  const subtitleScale = useStore(store, (s) => s.subtitleScale)
 
   const cue = useMemo(() => activeCue(cues, currentTimeS * 1000), [cues, currentTimeS])
   const feedback = useMemo(
@@ -100,29 +166,34 @@ export function SubtitleHud({ store }: { store: PlayerStoreApi }) {
   if (!mounted) return null
 
   return (
-    <HeadLocked>
-      <Container flexDirection="column" alignItems="center" gap={10}>
-        {feedback != null && (
-          <Container backgroundColor={FEEDBACK_BG} paddingX={16} paddingY={8} borderRadius={8}>
-            <Text fontSize={16} color="#ffffff">
-              {feedback.chapterTitle != null ? `${feedback.timeLabel} - ${feedback.chapterTitle}` : feedback.timeLabel}
-            </Text>
-          </Container>
-        )}
-        {showCaption && cue != null && (
-          <Container
-            backgroundColor={SUBTITLE_BG}
-            paddingX={20}
-            paddingY={12}
-            borderRadius={10}
-            maxWidth={SUBTITLE_MAX_WIDTH_PX}
-          >
-            {/* Real VTT cues carry their own embedded `\n` - see
-                `transcriptState.ts`'s `normalizeCueText` doc comment. */}
-            <Text fontSize={22} color="#ffffff" textAlign="center">{normalizeCueText(cue.text)}</Text>
-          </Container>
-        )}
-      </Container>
-    </HeadLocked>
+    // The documented way to resize a head-locked container: sphere-shell's
+    // README ("Rescaling", under HeadLocked HUD containers) says positioning is
+    // correct under an arbitrary parent transform, so a `<group scale>` around
+    // it is supported - and it is the RIGHT mechanism for text specifically,
+    // because uikit draws glyphs from an SDF atlas and so a uniform transform
+    // scale stays crisp, whereas driving `fontSize` would re-wrap the caption
+    // and leave padding/corner radius at a pixel size that no longer matches.
+    // See `SUBTITLE_SCALE_STEPS` in subtitleHudState.ts for why the factors are
+    // all well below 1.
+    <group scale={subtitleScale}>
+      <HeadLocked>
+        <Container flexDirection="column" alignItems="center" gap={10}>
+          {feedback != null && (
+            <HudPanel paddingX={16} paddingY={8} borderRadius={8}>
+              <Text fontSize={16} color="#ffffff">
+                {feedback.chapterTitle != null ? `${feedback.timeLabel} - ${feedback.chapterTitle}` : feedback.timeLabel}
+              </Text>
+            </HudPanel>
+          )}
+          {showCaption && cue != null && (
+            <HudPanel paddingX={20} paddingY={12} borderRadius={10} maxWidth={SUBTITLE_MAX_WIDTH_PX}>
+              {/* Real VTT cues carry their own embedded `\n` - see
+                  `transcriptState.ts`'s `normalizeCueText` doc comment. */}
+              <Text fontSize={22} color="#ffffff" textAlign="center">{normalizeCueText(cue.text)}</Text>
+            </HudPanel>
+          )}
+        </Container>
+      </HeadLocked>
+    </group>
   )
 }

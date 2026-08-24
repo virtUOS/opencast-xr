@@ -1,15 +1,35 @@
-import { useCallback, useRef } from 'react'
+import { useCallback, useMemo, useRef, type ReactNode } from 'react'
 import { useStore } from 'zustand'
 import type { ThreeEvent } from '@react-three/fiber'
 import { Container, Text, type VanillaContainer } from '@react-three/uikit'
-import { Library, LoaderCircle, Pause, Play } from '@react-three/uikit-lucide'
+import {
+  ALargeSmall,
+  Captions,
+  CaptionsOff,
+  ChevronRight,
+  House,
+  LoaderCircle,
+  Minus,
+  Pause,
+  Play,
+  Plus,
+  SkipBack,
+  SkipForward,
+  Volume2,
+  VolumeX,
+} from '@react-three/uikit-lucide'
 import type { PlayerStoreApi } from '../player/store'
+import type { SeriesStateApi } from './seriesState'
 import {
   derivePlaybackVisualState,
   fractionToSeconds,
   secondsToFraction,
+  stepVolume,
   transportTimeParts,
+  volumeToPercent,
 } from './transportState'
+import { cycleSubtitleScale, subtitleScaleLabel } from './subtitleHudState'
+import { adjacentEpisodes, breadcrumbTrail, playableEpisodes, type Crumb } from './breadcrumbState'
 import {
   type DragEffect,
   type DragState,
@@ -19,12 +39,107 @@ import {
 } from './timelineDrag'
 
 const BUTTON_ICON_PX = 15
+const SMALL_ICON_PX = 13
 const TRACK_WIDTH_PX = 180
 const TRACK_HEIGHT_PX = 6
+const ROW_HEIGHT_PX = 30
+/** The second row is text-and-small-buttons only, so it needs less height than row 1's play button and timeline. */
+const CRUMB_ROW_HEIGHT_PX = 24
+
+const BUTTON_BG = '#2c2c3a'
+const BUTTON_BG_HOVER = '#3a3a4a'
+const ACTIVE_BG = '#2f4f6f'
+const ACTIVE_BG_HOVER = '#3f6f9f'
+const DISABLED_COLOR = '#5a5a65'
+const CRUMB_COLOR = '#cfd8ff'
+const CRUMB_CURRENT_COLOR = '#9a9aa5'
 
 /**
- * The dock's player-mode transport: Play/Pause, a click-and-drag timeline,
- * a time readout, and the "Bibliothek" button back to browse mode.
+ * A square icon button in the dock's own idiom. Exists because this component
+ * now renders eight of them and the disabled variant has a real trap in it:
+ * `hover` must stay a plain object on every render, never
+ * `disabled ? undefined : {...}` - that exact conditional crashes the scene a
+ * few hundred ms later, inside r3f's reconciler, during an unrelated tree
+ * replacement. Reproduced and bisected in this app; see `docs/UIKIT-NOTES.md`
+ * entry 1 and `ControlsWindow.tsx`'s history. Encoding "no hover" as a hover
+ * colour equal to the resting colour is the fix, and having it in one helper
+ * is how it stays applied.
+ */
+function IconButton({
+  size = ROW_HEIGHT_PX,
+  background = BUTTON_BG,
+  hoverBackground = BUTTON_BG_HOVER,
+  disabled = false,
+  onPress,
+  children,
+}: {
+  size?: number
+  background?: string
+  hoverBackground?: string
+  disabled?: boolean
+  onPress: () => void
+  children: ReactNode
+}) {
+  return (
+    <Container
+      width={size}
+      height={size}
+      alignItems="center"
+      justifyContent="center"
+      backgroundColor={background}
+      borderRadius={6}
+      hover={{ backgroundColor: disabled ? background : hoverBackground }}
+      onClick={(e) => {
+        e.stopPropagation()
+        if (disabled) return
+        onPress()
+      }}
+    >
+      {children}
+    </Container>
+  )
+}
+
+/**
+ * The dock's player-mode transport, in TWO ROWS:
+ *
+ * - **row 1** - Play/Pause, the click-and-drag timeline with its time readout,
+ *   then audio (mute + volume) and captions (on/off + size);
+ * - **row 2** - the `Home > Reihe > aktuelle Aufzeichnung` breadcrumb, and
+ *   previous/next episode.
+ *
+ * ## Two rows inside a one-row dock
+ *
+ * `Dock.tsx`'s strip is a `flexDirection="row"` uikit Container with
+ * `alignItems="center"` and no fixed height, and the app's slot is one child of
+ * that row. So a slot child that is itself a `flexDirection="column"` simply
+ * becomes a taller row item and the dock grows to fit it - no sphere-shell
+ * change needed, and the shell's own Arrange/Recenter/Curved buttons stay
+ * vertically centred beside it. Verified live (screenshot + measured dock
+ * height) rather than assumed.
+ *
+ * ## What moved here, and what left
+ *
+ * This is the user-feedback round. The volume control and the subtitle toggle
+ * came out of `ControlsWindow` (a control you use while watching should not
+ * live in a window you have to look away at), and the old „Bibliothek" button
+ * is GONE - replaced by the breadcrumb's `Home` crumb, which does the same
+ * thing (`toBrowse()`) while also saying where you are. The series crumb goes
+ * one better than the old button could: it opens browse mode already scoped to
+ * that series' episode list, via the store's one-shot `browseTarget` (see
+ * `BrowseTarget` in `player/store.ts`). The current-recording crumb is
+ * deliberately inert - it is where you already are.
+ *
+ * Previous/next step through the series' own episode list in its own order,
+ * skipping recordings with nothing to play (`breadcrumbState.ts`'s
+ * `playableEpisodes`/`adjacentEpisodes`), disabled at either end, and absent
+ * entirely for a series-less recording. They call `store.openEpisode`, which
+ * per spec never autoplays: the next lecture lands paused at 0.
+ *
+ * The series episode list is NOT fetched here - it is the one
+ * `createSeriesState` instance `App.tsx` owns and also hands to
+ * `SeriesWindow`, so the breadcrumb's neighbours and that window's list are
+ * the same fetch and can never disagree.
  *
  * Rendered in `<WindowShell dockControls>` (see `App.tsx`) - App.tsx only
  * mounts this while `mode === 'player'`, which is what makes "Browse mode
@@ -150,11 +265,24 @@ const TRACK_HEIGHT_PX = 6
  * edges. Not a crash, not a stuck/frozen preview (that specific bug is
  * fixed) - a `curved`-only numeric inaccuracy.
  */
-export function DockTransport({ store }: { store: PlayerStoreApi }) {
+export function DockTransport({
+  store,
+  seriesStore,
+}: {
+  store: PlayerStoreApi
+  /** The ONE series-episode-list store `App.tsx` owns, shared with `SeriesWindow` - see this file's doc comment. */
+  seriesStore: SeriesStateApi
+}) {
   const episode = useStore(store, (s) => s.episode)
   const currentTimeS = useStore(store, (s) => s.currentTimeS)
   const seekPreviewS = useStore(store, (s) => s.seekPreviewS)
   const stalled = useStore(store, (s) => s.stalled)
+  const cuesCount = useStore(store, (s) => s.cues.length)
+  const subtitlesOn = useStore(store, (s) => s.subtitlesOn)
+  const subtitleScale = useStore(store, (s) => s.subtitleScale)
+  const volume = useStore(store, (s) => s.volume)
+  const muted = useStore(store, (s) => s.muted)
+  const seriesEpisodes = useStore(seriesStore, (s) => s.episodes)
   const durationS = (episode?.durationMs ?? 0) / 1000
 
   // Play intent comes straight from the store's own `playing` field, and this
@@ -285,74 +413,269 @@ export function DockTransport({ store }: { store: PlayerStoreApi }) {
     [applyEffects],
   )
 
+  // Every one of these writes through a store action, never through an element
+  // or the engine directly - the one-writer discipline `setPlaying` established
+  // (see store.ts).
+  const applyVolumeStep = useCallback(
+    (deltaSteps: number) => {
+      const state = store.getState()
+      state.setVolume(stepVolume(state.volume, deltaSteps))
+    },
+    [store],
+  )
+
+  const toggleMuted = useCallback(() => {
+    const state = store.getState()
+    state.setMuted(!state.muted)
+  }, [store])
+
+  const toggleSubtitles = useCallback(() => {
+    const state = store.getState()
+    state.setSubtitles(!state.subtitlesOn)
+  }, [store])
+
+  const cycleSize = useCallback(() => {
+    const state = store.getState()
+    state.setSubtitleScale(cycleSubtitleScale(state.subtitleScale))
+  }, [store])
+
+  const trail = useMemo(
+    () => (episode ? breadcrumbTrail(episode) : []),
+    [episode],
+  )
+
+  // Previous/next step through the PLAYABLE episodes of the series only - see
+  // `playableEpisodes`. Both are null until the series list has actually been
+  // fetched and contains the open episode, which is the honest rendering for
+  // those first frames (the buttons are disabled) rather than a guess.
+  const neighbours = useMemo(
+    () => adjacentEpisodes(playableEpisodes(seriesEpisodes), episode?.id ?? ''),
+    [seriesEpisodes, episode?.id],
+  )
+
+  const openNeighbour = useCallback(
+    (id: string | undefined) => {
+      if (id == null) return
+      // Swallowed rather than surfaced: unlike `SeriesWindow`/`LibraryWindow`,
+      // the dock has no room for an error banner, and the failure mode is
+      // benign - `openEpisode` rejects BEFORE tearing anything down (see its
+      // doc comment), so the current episode keeps playing and the click simply
+      // did nothing. The rejection is logged so it is not silent.
+      store
+        .getState()
+        .openEpisode(id)
+        .catch((err: unknown) => {
+          console.error('[DockTransport] Episodenwechsel fehlgeschlagen', err)
+        })
+    },
+    [store],
+  )
+
+  const onCrumb = useCallback(
+    (crumb: Crumb) => {
+      // 'current' is where the user already is - a no-op by design, see this
+      // file's doc comment.
+      if (crumb.kind === 'current') return
+      if (crumb.kind === 'home') {
+        store.getState().toBrowse()
+        return
+      }
+      if (crumb.sid == null) return // structurally impossible; breadcrumbTrail always sets it for 'series'
+      store.getState().toBrowse({ kind: 'series', sid: crumb.sid, title: crumb.label })
+    },
+    [store],
+  )
+
   // Defensive only: App.tsx mounts this exclusively in player mode, which
   // always has an episode by the time `mode` flips (see store.ts's
   // `openEpisode`, which sets both in the same `set()` call).
   if (!episode) return null
 
-  return (
-    <>
-      <Container
-        height={30}
-        width={30}
-        alignItems="center"
-        justifyContent="center"
-        backgroundColor="#2f6f4f"
-        borderRadius={6}
-        hover={{ backgroundColor: '#3f9f6f' }}
-        onClick={(e) => {
-          e.stopPropagation()
-          togglePlay()
-        }}
-      >
-        <PlayPauseIcon width={BUTTON_ICON_PX} height={BUTTON_ICON_PX} color="#ffffff" />
-      </Container>
+  const subtitlesDisabled = cuesCount === 0
+  const captionColor = subtitlesDisabled ? DISABLED_COLOR : '#ffffff'
+  // Two signals for one state, on purpose: the icon says on/off at a glance
+  // (a controller ray away, where a colour difference is easy to miss) and the
+  // background says it too.
+  const CaptionIcon = subtitlesOn && !subtitlesDisabled ? Captions : CaptionsOff
+  const VolumeIcon = muted ? VolumeX : Volume2
+  // Only for a recording that HAS a series: for a single recording there is no
+  // list to step through, so the controls are absent rather than permanently
+  // disabled (nothing the user could do would ever enable them).
+  const showNeighbours = episode.seriesId != null
 
-      <Container height={30} flexDirection="row" alignItems="center" gap={8}>
-        <Text fontSize={11} color="#cfd8ff">{currentLabel}</Text>
+  return (
+    <Container flexDirection="column" gap={6} alignItems="flex-start">
+      {/* ROW 1: transport, audio, captions */}
+      <Container flexDirection="row" alignItems="center" gap={8}>
         <Container
-          ref={trackRef}
-          width={TRACK_WIDTH_PX}
-          height={TRACK_HEIGHT_PX}
-          borderRadius={TRACK_HEIGHT_PX / 2}
-          backgroundColor="#33333d"
-          onPointerDown={onTrackPointerDown}
-          onPointerMove={onTrackPointerMove}
-          onPointerUp={onTrackPointerUp}
-          onPointerCancel={onTrackPointerCancel}
+          height={ROW_HEIGHT_PX}
+          width={ROW_HEIGHT_PX}
+          alignItems="center"
+          justifyContent="center"
+          backgroundColor="#2f6f4f"
+          borderRadius={6}
+          hover={{ backgroundColor: '#3f9f6f' }}
+          onClick={(e) => {
+            e.stopPropagation()
+            togglePlay()
+          }}
         >
+          <PlayPauseIcon width={BUTTON_ICON_PX} height={BUTTON_ICON_PX} color="#ffffff" />
+        </Container>
+
+        <Container height={ROW_HEIGHT_PX} flexDirection="row" alignItems="center" gap={8}>
+          <Text fontSize={11} color="#cfd8ff">{currentLabel}</Text>
           <Container
-            positionType="absolute"
-            positionLeft={0}
-            positionTop={0}
-            width={Math.round(TRACK_WIDTH_PX * fillFraction)}
+            ref={trackRef}
+            width={TRACK_WIDTH_PX}
             height={TRACK_HEIGHT_PX}
             borderRadius={TRACK_HEIGHT_PX / 2}
-            backgroundColor="#6f9fff"
-            pointerEvents="none"
-          />
+            backgroundColor="#33333d"
+            onPointerDown={onTrackPointerDown}
+            onPointerMove={onTrackPointerMove}
+            onPointerUp={onTrackPointerUp}
+            onPointerCancel={onTrackPointerCancel}
+          >
+            <Container
+              positionType="absolute"
+              positionLeft={0}
+              positionTop={0}
+              width={Math.round(TRACK_WIDTH_PX * fillFraction)}
+              height={TRACK_HEIGHT_PX}
+              borderRadius={TRACK_HEIGHT_PX / 2}
+              backgroundColor="#6f9fff"
+              pointerEvents="none"
+            />
+          </Container>
+          <Text fontSize={11} color="#cfd8ff">{totalLabel}</Text>
         </Container>
-        <Text fontSize={11} color="#cfd8ff">{totalLabel}</Text>
+
+        {/* Audio: mute, then volume in 10% steps. The percentage stays visible
+            while muted (greyed) rather than being replaced by "-" - it is the
+            level unmuting will come back to, which is exactly what someone
+            reaching for the volume while muted wants to know. */}
+        <IconButton
+          background={muted ? ACTIVE_BG : BUTTON_BG}
+          hoverBackground={muted ? ACTIVE_BG_HOVER : BUTTON_BG_HOVER}
+          onPress={toggleMuted}
+        >
+          <VolumeIcon width={BUTTON_ICON_PX} height={BUTTON_ICON_PX} color="#ffffff" />
+        </IconButton>
+        <IconButton size={24} disabled={volume <= 0} onPress={() => applyVolumeStep(-1)}>
+          <Minus width={SMALL_ICON_PX} height={SMALL_ICON_PX} color={volume <= 0 ? DISABLED_COLOR : '#ffffff'} />
+        </IconButton>
+        <Text
+          fontSize={11}
+          color={muted ? DISABLED_COLOR : '#cfd8ff'}
+          // Fixed width so stepping 90% -> 100% does not shove every control
+          // to its right sideways (and, in the dock's row, resize the whole
+          // strip) on each click.
+          width={30}
+          textAlign="center"
+        >
+          {`${volumeToPercent(volume)}%`}
+        </Text>
+        <IconButton size={24} disabled={volume >= 1} onPress={() => applyVolumeStep(1)}>
+          <Plus width={SMALL_ICON_PX} height={SMALL_ICON_PX} color={volume >= 1 ? DISABLED_COLOR : '#ffffff'} />
+        </IconButton>
+
+        {/* Captions: on/off, then size. Both were in `ControlsWindow`'s
+            territory before this round (size did not exist at all). */}
+        <IconButton
+          background={subtitlesOn && !subtitlesDisabled ? ACTIVE_BG : BUTTON_BG}
+          hoverBackground={subtitlesOn && !subtitlesDisabled ? ACTIVE_BG_HOVER : BUTTON_BG_HOVER}
+          disabled={subtitlesDisabled}
+          onPress={toggleSubtitles}
+        >
+          <CaptionIcon width={BUTTON_ICON_PX} height={BUTTON_ICON_PX} color={captionColor} />
+        </IconButton>
+        {/* One cycling button (S -> M -> L -> S) rather than a -/+ pair: this
+            row is already dense, and with three steps any size is at most two
+            clicks away. The label is the current step, not the next one. */}
+        <Container
+          height={ROW_HEIGHT_PX}
+          paddingX={8}
+          gap={4}
+          flexDirection="row"
+          alignItems="center"
+          justifyContent="center"
+          backgroundColor={BUTTON_BG}
+          borderRadius={6}
+          hover={{ backgroundColor: subtitlesDisabled ? BUTTON_BG : BUTTON_BG_HOVER }}
+          onClick={(e) => {
+            e.stopPropagation()
+            if (subtitlesDisabled) return
+            cycleSize()
+          }}
+        >
+          <ALargeSmall width={BUTTON_ICON_PX} height={BUTTON_ICON_PX} color={captionColor} />
+          <Text fontSize={11} color={captionColor}>{subtitleScaleLabel(subtitleScale)}</Text>
+        </Container>
       </Container>
 
-      <Container
-        height={30}
-        paddingX={10}
-        gap={6}
-        flexDirection="row"
-        alignItems="center"
-        justifyContent="center"
-        backgroundColor="#2f4f6f"
-        borderRadius={6}
-        hover={{ backgroundColor: '#3f6f9f' }}
-        onClick={(e) => {
-          e.stopPropagation()
-          store.getState().toBrowse()
-        }}
-      >
-        <Library width={BUTTON_ICON_PX} height={BUTTON_ICON_PX} color="#ffffff" />
-        <Text fontSize={12} color="#ffffff">Bibliothek</Text>
+      {/* ROW 2: where you are, and the neighbouring recordings */}
+      <Container flexDirection="row" alignItems="center" gap={4}>
+        {trail.map((crumb, index) => (
+          // `kind` is unique within a trail (one home, at most one series, one
+          // current - see breadcrumbTrail), so it is a stable key.
+          <Container key={crumb.kind} flexDirection="row" alignItems="center" gap={4}>
+            {index > 0 && <ChevronRight width={11} height={11} color="#5a5a65" />}
+            <Container
+              height={CRUMB_ROW_HEIGHT_PX}
+              paddingX={6}
+              gap={4}
+              flexDirection="row"
+              alignItems="center"
+              borderRadius={4}
+              backgroundColor="#22222c"
+              // The current crumb is not a link: same resting colour on hover,
+              // and the click handler returns early (see `onCrumb`). Kept as an
+              // always-present object - never `undefined` - per
+              // docs/UIKIT-NOTES.md entry 1.
+              hover={{ backgroundColor: crumb.kind === 'current' ? '#22222c' : '#2f3a4f' }}
+              onClick={(e) => {
+                e.stopPropagation()
+                onCrumb(crumb)
+              }}
+            >
+              {crumb.kind === 'home' && <House width={11} height={11} color={CRUMB_COLOR} />}
+              <Text
+                fontSize={11}
+                color={crumb.kind === 'current' ? CRUMB_CURRENT_COLOR : CRUMB_COLOR}
+              >
+                {crumb.label}
+              </Text>
+            </Container>
+          </Container>
+        ))}
+
+        {showNeighbours && (
+          <Container flexDirection="row" alignItems="center" gap={4} marginLeft={8}>
+            <IconButton
+              size={CRUMB_ROW_HEIGHT_PX}
+              disabled={neighbours.previous == null}
+              onPress={() => openNeighbour(neighbours.previous?.id)}
+            >
+              <SkipBack
+                width={SMALL_ICON_PX}
+                height={SMALL_ICON_PX}
+                color={neighbours.previous == null ? DISABLED_COLOR : '#ffffff'}
+              />
+            </IconButton>
+            <IconButton
+              size={CRUMB_ROW_HEIGHT_PX}
+              disabled={neighbours.next == null}
+              onPress={() => openNeighbour(neighbours.next?.id)}
+            >
+              <SkipForward
+                width={SMALL_ICON_PX}
+                height={SMALL_ICON_PX}
+                color={neighbours.next == null ? DISABLED_COLOR : '#ffffff'}
+              />
+            </IconButton>
+          </Container>
+        )}
       </Container>
-    </>
+    </Container>
   )
 }

@@ -20,6 +20,7 @@ import { ChaptersWindow } from './windows/ChaptersWindow'
 import { SeriesWindow } from './windows/SeriesWindow'
 import { TranscriptWindow } from './windows/TranscriptWindow'
 import { SubtitleHud } from './windows/SubtitleHud'
+import { createSeriesState } from './windows/seriesState'
 import { SyntheticDualStreamClient } from './dev/syntheticDualStream'
 
 /**
@@ -78,6 +79,24 @@ export function App() {
     return () => playerStore.getState().dispose()
   }, [playerStore])
   const mode = useStore(playerStore, (s) => s.mode)
+
+  // The open episode's series episode list, fetched ONCE and read by two
+  // consumers: `SeriesWindow` (which lists it) and `DockTransport`'s
+  // previous/next episode controls (which need the neighbours in the same
+  // order). `SeriesWindow` used to create this itself; a second instance in
+  // the dock would fetch the same series again and the two could disagree
+  // mid-pagination, so it is hoisted here - one fetch, one order, two readers.
+  //
+  // Owned here rather than in the player store because it is a WINDOW's
+  // fetch/pagination state (its own race-token discipline, its own retry), not
+  // playback state, and because putting it in `openEpisode` would put an extra
+  // network round trip and an extra failure mode on the critical path of
+  // opening a recording.
+  const seriesStore = useMemo(() => createSeriesState(client), [client])
+  const openSeriesId = useStore(playerStore, (s) => s.episode?.seriesId)
+  useEffect(() => {
+    if (openSeriesId) void seriesStore.getState().load(openSeriesId)
+  }, [seriesStore, openSeriesId])
 
   // Non-null exactly in a dev build (see the client memo above). The
   // `instanceof` keeps the checkbox tied to the client that can actually honour
@@ -237,7 +256,9 @@ export function App() {
             // brief) - undefined rather than an empty fragment while
             // browsing, so the dock renders its own default
             // Arrange/Recenter/Exit-VR buttons with no app slot beside them.
-            dockControls={mode === 'player' ? <DockTransport store={playerStore} /> : undefined}
+            dockControls={
+              mode === 'player' ? <DockTransport store={playerStore} seriesStore={seriesStore} /> : undefined
+            }
           >
             {mode === 'browse' ? (
               <LibraryWindow store={playerStore} />
@@ -251,7 +272,7 @@ export function App() {
                     the (structurally impossible, but still checked) missing-episode
                     case. */}
                 <ChaptersWindow store={playerStore} />
-                <SeriesWindow store={playerStore} />
+                <SeriesWindow store={playerStore} seriesStore={seriesStore} />
                 <TranscriptWindow store={playerStore} />
               </>
             )}

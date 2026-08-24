@@ -66,13 +66,36 @@ export function seekFeedback(segments: OcSegment[], previewS: number | null, dur
  * browser-measured retune, and the comment on each one is the panel width they
  * produce in metres.
  *
- * RETUNED BROWSER-FIRST. The Quest look is unverified - see
- * `docs/QUEST-VALIDATION-PLAYER.md`.
+ * ### The measurements these came from
+ *
+ * Measured live in the magic window (world AABB of the caption's own
+ * `<group scale>` subtree, projected through the live camera), at 640x480 -
+ * aspect 1.33, the NARROW case, since the caption's world width is fixed while
+ * the frustum's width grows with aspect:
+ *
+ * | scale | panel width | % of canvas width @4:3 | @16:9 |
+ * |-------|-------------|------------------------|-------|
+ * | 0.18  | 0.93 m      | 44 %                   | 33 %  |
+ * | 0.24  | 1.24 m      | 60 %                   | 45 %  |
+ * | 0.32  | 1.66 m      | 80 %                   | 60 %  |
+ * | 0.40  | 2.07 m      | 102 % - CLIPPED        | 76 %  |
+ *
+ * (@4:3 columns measured; @16:9 derived from them by the frustum's own
+ * width ratio, since the panel's world width does not depend on aspect.)
+ *
+ * 0.4 was the first draft's largest step and it does not fit a 4:3 window at
+ * all (measured `insideCanvas: false`, NDC x spanning -1.019..1.017), which is
+ * exactly the reported bug in miniature - hence the ladder below stops at 0.32,
+ * where even the largest step clears both edges at 4:3.
+ *
+ * RETUNED BROWSER-FIRST. The Quest look is unverified - a headset renders each
+ * eye through its own narrower frustum, so these may well read as too SMALL
+ * there. See `docs/QUEST-VALIDATION-PLAYER.md`.
  */
 // Typed `readonly number[]` rather than `as const`: a tuple of literal types
 // would make every derived constant (the default, MIN/MAX) a literal type too,
 // which then fights every ordinary `number` it is compared or assigned to.
-export const SUBTITLE_SCALE_STEPS: readonly number[] = [0.22, 0.3, 0.4]
+export const SUBTITLE_SCALE_STEPS: readonly number[] = [0.18, 0.24, 0.32]
 
 /** One-character labels for `SUBTITLE_SCALE_STEPS`, index for index - short enough for a dock button. */
 export const SUBTITLE_SCALE_LABELS: readonly string[] = ['S', 'M', 'L']

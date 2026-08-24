@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { useStore } from 'zustand'
 import { Container, Text } from '@react-three/uikit'
 import { Window } from 'sphere-shell'
 import type { PlayerStoreApi } from '../player/store'
 import { MediaList } from './MediaList'
 import { toEpisodeTile } from './libraryState'
-import { createSeriesState } from './seriesState'
+import type { SeriesStateApi } from './seriesState'
 
 const RETRY_LABEL = 'Erneut versuchen'
 
@@ -55,26 +55,23 @@ function ErrorPanel({ message, onRetry }: { message: string; onRetry: () => void
  * comment on the swap - never autoplays: the new episode lands paused at 0.
  *
  * Fetching/pagination for the series' own episode list lives in the pure,
- * unit-tested `seriesState.ts` (its own small zustand store, one per
- * mount - same pattern `LibraryWindow.tsx` uses for `libraryState.ts`).
+ * unit-tested `seriesState.ts`. That store used to be created HERE, one per
+ * mount; since the user-feedback round it is created by `App.tsx` and passed
+ * in, because the dock's previous/next episode controls need the same list
+ * (`DockTransport.tsx`) and two instances would mean two fetches of the same
+ * series that could disagree with each other mid-pagination. `App.tsx` also
+ * owns the load effect, keyed on the open episode's `seriesId`.
  */
-export function SeriesWindow({ store }: { store: PlayerStoreApi }) {
-  // `client` is fixed for the store's whole lifetime (see player/store.ts),
-  // so this memo never re-fires after the first render.
-  const client = useStore(store, (s) => s.client)
-  const seriesStore = useMemo(() => createSeriesState(client), [client])
-
+export function SeriesWindow({
+  store,
+  seriesStore,
+}: {
+  store: PlayerStoreApi
+  /** The one instance `App.tsx` owns, shared with `DockTransport` - see this component's doc comment. */
+  seriesStore: SeriesStateApi
+}) {
   const seriesId = useStore(store, (s) => s.episode?.seriesId)
   const currentEpisodeId = useStore(store, (s) => s.episode?.id)
-
-  // Re-fetches whenever the open episode's seriesId changes. In practice
-  // that only happens once per mount (this window only ever lists the
-  // CURRENTLY open episode's own series - switching within it via the tiles
-  // below keeps the same seriesId), but keying on it rather than firing
-  // once on mount keeps this correct if that ever changes, at no cost.
-  useEffect(() => {
-    if (seriesId) void seriesStore.getState().load(seriesId)
-  }, [seriesStore, seriesId])
 
   const episodes = useStore(seriesStore, (s) => s.episodes)
   const loading = useStore(seriesStore, (s) => s.loading)
