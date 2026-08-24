@@ -183,6 +183,148 @@ describe('SyncEngine: registration, master election, mute/volume discipline', ()
   })
 })
 
+/**
+ * Mute is a SESSION-level concept, not "volume 0 and hope nothing else wrote
+ * volume in between": the engine already owns the whole audio invariant in one
+ * sweep (`applyAudio`), so muting is one more input to that sweep rather than a
+ * second, competing writer of `volume`. These tests pin exactly that - in
+ * particular that the volume value survives a mute/unmute round trip
+ * untouched, and that every registry mutation (handover, rejoin, element swap)
+ * re-derives mute from the sweep instead of leaving a stale unmuted element
+ * behind.
+ */
+describe('SyncEngine: session mute', () => {
+  it('(a) muted defaults to false, and the getter reports the last setMuted value', () => {
+    const engine = new SyncEngine()
+    expect(engine.muted).toBe(false)
+    engine.setMuted(true)
+    expect(engine.muted).toBe(true)
+    engine.setMuted(false)
+    expect(engine.muted).toBe(false)
+  })
+
+  it('(b) muting silences the master; unmuting brings it back at the engine volume', () => {
+    const engine = new SyncEngine()
+    const presenter = new FakeVideo()
+    engine.register('presenter', presenter, 0)
+    engine.setVolume(0.4)
+    expect(presenter.muted).toBe(false)
+
+    engine.setMuted(true)
+    expect(presenter.muted).toBe(true)
+
+    engine.setMuted(false)
+    expect(presenter.muted).toBe(false)
+    expect(presenter.volume).toBe(0.4)
+  })
+
+  it('(c) mute leaves `volume` untouched, so a round trip restores it exactly', () => {
+    const engine = new SyncEngine()
+    const presenter = new FakeVideo()
+    engine.register('presenter', presenter, 0)
+    engine.setVolume(0.3)
+
+    engine.setMuted(true)
+    // The whole reason mute is not "setVolume(0) and remember the old one":
+    // the engine's own notion of volume must not be clobbered by muting.
+    expect(engine.volume).toBe(0.3)
+    engine.setMuted(false)
+
+    expect(engine.volume).toBe(0.3)
+    expect(presenter.volume).toBe(0.3)
+  })
+
+  it('(d) volume can be changed WHILE muted, and takes effect on unmute', () => {
+    const engine = new SyncEngine()
+    const presenter = new FakeVideo()
+    engine.register('presenter', presenter, 0)
+
+    engine.setMuted(true)
+    engine.setVolume(0.2)
+    expect(presenter.muted).toBe(true) // a volume change must not un-mute
+
+    engine.setMuted(false)
+    expect(presenter.muted).toBe(false)
+    expect(presenter.volume).toBe(0.2)
+  })
+
+  it('(e) mute survives a master handover - the successor is muted too', () => {
+    const engine = new SyncEngine()
+    const presenter = new FakeVideo()
+    const presentation = new FakeVideo()
+    engine.register('presenter', presenter, 0)
+    engine.register('presentation', presentation, 1)
+    engine.setMuted(true)
+
+    engine.unregister('presenter')
+
+    expect(engine.masterId).toBe('presentation')
+    expect(presentation.muted).toBe(true)
+  })
+
+  it('(f) mute survives an element swap under a stable id', () => {
+    const engine = new SyncEngine()
+    const first = new FakeVideo()
+    engine.register('master', first, 0)
+    engine.setMuted(true)
+
+    const second = new FakeVideo()
+    engine.register('master', second, 0)
+
+    expect(engine.masterId).toBe('master')
+    expect(second.muted).toBe(true)
+  })
+
+  it('(g) a stream joining while muted joins muted, whether it becomes master or not', () => {
+    const engine = new SyncEngine()
+    engine.setMuted(true)
+    const presentation = new FakeVideo()
+    engine.register('presentation', presentation, 1)
+    expect(presentation.muted).toBe(true)
+
+    // A better-preference newcomer takes the master role - and the audio with
+    // it, which while muted means no audio at all.
+    const presenter = new FakeVideo()
+    engine.register('presenter', presenter, 0)
+    expect(engine.masterId).toBe('presenter')
+    expect(presenter.muted).toBe(true)
+    expect(presentation.muted).toBe(true)
+  })
+
+  it('(h) mute does not touch play intent or whether anything is playing', () => {
+    const engine = new SyncEngine()
+    const presenter = new FakeVideo()
+    engine.register('presenter', presenter, 0)
+    engine.play()
+    expect(presenter.paused).toBe(false)
+    const pauseCallsBefore = presenter.pauseCalls
+
+    engine.setMuted(true)
+
+    expect(engine.playing).toBe(true)
+    expect(presenter.paused).toBe(false)
+    expect(presenter.pauseCalls).toBe(pauseCallsBefore) // silenced, not stopped
+  })
+
+  it('(i) a redundant setMuted is idempotent - no pause, no volume change', () => {
+    const engine = new SyncEngine()
+    const presenter = new FakeVideo()
+    engine.register('presenter', presenter, 0)
+    engine.setVolume(0.6)
+    engine.play()
+
+    engine.setMuted(true)
+    engine.setMuted(true)
+    expect(presenter.muted).toBe(true)
+    expect(presenter.paused).toBe(false)
+
+    engine.setMuted(false)
+    engine.setMuted(false)
+    expect(presenter.muted).toBe(false)
+    expect(presenter.volume).toBe(0.6)
+  })
+})
+
 describe('SyncEngine: drift bands (tick)', () => {
   function mkMasterAndSlave() {
     const engine = new SyncEngine()

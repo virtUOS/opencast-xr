@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { OpencastClient } from '../opencast/client'
 import { derivePlaybackVisualState } from '../windows/transportState'
+import {
+  DEFAULT_SUBTITLE_SCALE,
+  MAX_SUBTITLE_SCALE,
+  MIN_SUBTITLE_SCALE,
+} from '../windows/subtitleHudState'
 import { createPlayerStore, type PlayerStoreApi } from './store'
 
 // Tracks every store created by makeStore() below so afterEach can dispose()
@@ -811,6 +816,234 @@ describe('createPlayerStore', () => {
       expect(store.getState().seekPreviewS).toBe(12.5)
       store.getState().setSeekPreview(null)
       expect(store.getState().seekPreviewS).toBeNull()
+    })
+  })
+
+  describe('setSubtitleScale', () => {
+    it('starts at the caption default and stores a value inside the offered range', () => {
+      const { client } = makeClient()
+      const store = makeStore(client)
+      expect(store.getState().subtitleScale).toBe(DEFAULT_SUBTITLE_SCALE)
+
+      store.getState().setSubtitleScale(MIN_SUBTITLE_SCALE)
+      expect(store.getState().subtitleScale).toBe(MIN_SUBTITLE_SCALE)
+      store.getState().setSubtitleScale(MAX_SUBTITLE_SCALE)
+      expect(store.getState().subtitleScale).toBe(MAX_SUBTITLE_SCALE)
+    })
+
+    it('clamps out-of-range values to the ends of the range', () => {
+      const { client } = makeClient()
+      const store = makeStore(client)
+
+      store.getState().setSubtitleScale(0)
+      expect(store.getState().subtitleScale).toBe(MIN_SUBTITLE_SCALE)
+      store.getState().setSubtitleScale(-3)
+      expect(store.getState().subtitleScale).toBe(MIN_SUBTITLE_SCALE)
+      store.getState().setSubtitleScale(50)
+      expect(store.getState().subtitleScale).toBe(MAX_SUBTITLE_SCALE)
+    })
+
+    it('never lets a non-finite scale through - a NaN would make the whole HUD vanish', () => {
+      const { client } = makeClient()
+      const store = makeStore(client)
+
+      store.getState().setSubtitleScale(Number.NaN)
+      expect(store.getState().subtitleScale).toBe(DEFAULT_SUBTITLE_SCALE)
+      store.getState().setSubtitleScale(Number.POSITIVE_INFINITY)
+      expect(store.getState().subtitleScale).toBe(DEFAULT_SUBTITLE_SCALE)
+      expect(Number.isFinite(store.getState().subtitleScale)).toBe(true)
+    })
+
+    it('survives an episode swap and a return to browse - it is a viewer preference, not episode state', async () => {
+      const { client } = makeClient()
+      const store = makeStore(client)
+      store.getState().setSubtitleScale(MAX_SUBTITLE_SCALE)
+
+      await store.getState().openEpisode('ep-1')
+      expect(store.getState().subtitleScale).toBe(MAX_SUBTITLE_SCALE)
+      await store.getState().openEpisode('ep-2')
+      expect(store.getState().subtitleScale).toBe(MAX_SUBTITLE_SCALE)
+      store.getState().toBrowse()
+      expect(store.getState().subtitleScale).toBe(MAX_SUBTITLE_SCALE)
+    })
+  })
+
+  describe('setVolume / setMuted', () => {
+    it('mirrors SyncEngine\'s own defaults on a fresh store', () => {
+      const { client } = makeClient()
+      const store = makeStore(client)
+      const state = store.getState()
+
+      expect(state.volume).toBe(state.engine.volume)
+      expect(state.muted).toBe(state.engine.muted)
+      expect(state.volume).toBe(1)
+      expect(state.muted).toBe(false)
+    })
+
+    it('setVolume drives the engine and mirrors the value in the same block', () => {
+      const { client } = makeClient()
+      const store = makeStore(client)
+      const spy = vi.spyOn(store.getState().engine, 'setVolume')
+
+      store.getState().setVolume(0.4)
+
+      expect(spy).toHaveBeenCalledWith(0.4)
+      expect(store.getState().volume).toBe(0.4)
+      expect(store.getState().engine.volume).toBe(0.4)
+    })
+
+    it('setVolume clamps to [0, 1] and ignores a non-finite value', () => {
+      const { client } = makeClient()
+      const store = makeStore(client)
+
+      store.getState().setVolume(-1)
+      expect(store.getState().volume).toBe(0)
+      store.getState().setVolume(5)
+      expect(store.getState().volume).toBe(1)
+      store.getState().setVolume(0.7)
+      store.getState().setVolume(Number.NaN)
+      expect(store.getState().volume).toBe(0.7) // unchanged, not NaN
+      expect(store.getState().engine.volume).toBe(0.7)
+    })
+
+    it('setMuted drives the engine and mirrors the flag', () => {
+      const { client } = makeClient()
+      const store = makeStore(client)
+      const spy = vi.spyOn(store.getState().engine, 'setMuted')
+
+      store.getState().setMuted(true)
+      expect(spy).toHaveBeenCalledWith(true)
+      expect(store.getState().muted).toBe(true)
+      expect(store.getState().engine.muted).toBe(true)
+
+      store.getState().setMuted(false)
+      expect(store.getState().muted).toBe(false)
+      expect(store.getState().engine.muted).toBe(false)
+    })
+
+    it('mute really silences the master element, and unmute restores it at the same volume', async () => {
+      const { client } = makeClient()
+      const store = makeStore(client)
+      await store.getState().openEpisode('ep-1')
+      store.getState().setVolume(0.6)
+      const master = store.getState().getElement('presenter')!
+      expect(master.muted).toBe(false)
+
+      store.getState().setMuted(true)
+      expect(master.muted).toBe(true)
+      expect(store.getState().volume).toBe(0.6) // the level is not destroyed
+
+      store.getState().setMuted(false)
+      expect(master.muted).toBe(false)
+      expect(master.volume).toBe(0.6)
+    })
+
+    it('mute does not touch play intent - it silences, it does not pause', async () => {
+      const { client } = makeClient()
+      const store = makeStore(client)
+      await store.getState().openEpisode('ep-1')
+      for (const f of ['presenter', 'presentation']) {
+        fakeMedia(store.getState().getElement(f)!, { readyState: READY })
+      }
+      store.getState().setPlaying(true)
+      expect(store.getState().playing).toBe(true)
+
+      store.getState().setMuted(true)
+
+      expect(store.getState().playing).toBe(true)
+      expect(store.getState().getElement('presenter')!.paused).toBe(false)
+    })
+
+    it('volume and mute survive an episode swap - the engine re-applies them to the new master', async () => {
+      const { client } = makeClient()
+      const store = makeStore(client)
+      store.getState().setVolume(0.25)
+      store.getState().setMuted(true)
+
+      await store.getState().openEpisode('ep-1')
+      expect(store.getState().getElement('presenter')!.muted).toBe(true)
+      await store.getState().openEpisode('ep-2')
+
+      const master = store.getState().getElement('presenter')!
+      expect(store.getState().volume).toBe(0.25)
+      expect(store.getState().muted).toBe(true)
+      expect(master.muted).toBe(true)
+      expect(master.volume).toBe(0.25)
+    })
+  })
+
+  describe('browseTarget / consumeBrowseTarget', () => {
+    const target = { kind: 'series', sid: 's1', title: 'Chaos' } as const
+
+    it('is null on a fresh store and after a plain toBrowse', async () => {
+      const { client } = makeClient()
+      const store = makeStore(client)
+      expect(store.getState().browseTarget).toBeNull()
+
+      await store.getState().openEpisode('ep-1')
+      store.getState().toBrowse()
+      expect(store.getState().browseTarget).toBeNull()
+    })
+
+    it('toBrowse(target) records where browse mode should open', async () => {
+      const { client } = makeClient()
+      const store = makeStore(client)
+      await store.getState().openEpisode('ep-1')
+
+      store.getState().toBrowse(target)
+
+      expect(store.getState().mode).toBe('browse')
+      expect(store.getState().browseTarget).toEqual(target)
+    })
+
+    it('consumeBrowseTarget hands the target over exactly once', async () => {
+      const { client } = makeClient()
+      const store = makeStore(client)
+      await store.getState().openEpisode('ep-1')
+      store.getState().toBrowse(target)
+
+      expect(store.getState().consumeBrowseTarget()).toEqual(target)
+      // A re-fired effect / StrictMode double-invoke must not apply it again.
+      expect(store.getState().consumeBrowseTarget()).toBeNull()
+      expect(store.getState().browseTarget).toBeNull()
+    })
+
+    it('a plain toBrowse CLEARS a target left over from an earlier scoped one', async () => {
+      const { client } = makeClient()
+      const store = makeStore(client)
+      await store.getState().openEpisode('ep-1')
+      store.getState().toBrowse(target)
+
+      await store.getState().openEpisode('ep-2')
+      store.getState().toBrowse()
+
+      expect(store.getState().browseTarget).toBeNull()
+    })
+
+    it('consuming nothing does not notify subscribers', () => {
+      const { client } = makeClient()
+      const store = makeStore(client)
+      const listener = vi.fn()
+      const unsubscribe = store.subscribe(listener)
+
+      expect(store.getState().consumeBrowseTarget()).toBeNull()
+
+      expect(listener).not.toHaveBeenCalled()
+      unsubscribe()
+    })
+
+    it('a scoped toBrowse still tears playback down exactly like a plain one', async () => {
+      const { client } = makeClient()
+      const store = makeStore(client)
+      await store.getState().openEpisode('ep-1')
+      store.getState().setPlaying(true)
+
+      store.getState().toBrowse(target)
+
+      expect(store.getState().playing).toBe(false)
+      expect(store.getState().engine.playing).toBe(false)
+      expect(store.getState().streams).toEqual([])
+      expect(document.querySelectorAll('video')).toHaveLength(0)
     })
   })
 

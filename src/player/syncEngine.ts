@@ -99,7 +99,8 @@ function safePlay(video: VideoLike): void {
  *   1. a non-empty registry has exactly one master - the lowest-preference
  *      stream registered - so there is no masterless-but-populated state, not
  *      even for a hostile preference like NaN;
- *   2. exactly one REGISTERED stream is unmuted, and it's that master. An
+ *   2. exactly one REGISTERED stream is unmuted, and it's that master - unless
+ *      the session is muted (`setMuted(true)`), in which case none is. An
  *      element that leaves engine control (unregistered, or displaced by a
  *      swap under a stable id) is `retire()`d - silenced and stopped - since
  *      the sweep can no longer reach it.
@@ -124,6 +125,18 @@ export class SyncEngine {
   /** Ids the engine itself paused to enforce a stall, so it knows exactly who to resume on recovery. */
   private readonly pausedForStall = new Set<string>()
   private masterVolume = 1
+  /**
+   * Session mute, as its own input to `applyAudio` rather than a second writer
+   * of `masterVolume`. Deliberately NOT implemented as "setVolume(0) and
+   * remember the old value": that needs a shadow copy of the volume which is
+   * only correct as long as nothing else writes volume in between (a volume
+   * step while muted is a perfectly ordinary thing for a UI to allow - see
+   * the mute tests' case (d)), and it makes "is the session silent" ambiguous
+   * with "the user turned the volume all the way down". As a flag, the sweep
+   * re-derives it for free after every registry mutation, so a handover, a
+   * rejoin or an element swap cannot leave an unmuted element behind.
+   */
+  private masterMuted = false
   private lastKnownTime = 0
   /**
    * True once `lastKnownTime` carries a real session position - a seek, or the
@@ -318,7 +331,14 @@ export class SyncEngine {
   private applyAudio(): void {
     for (const [id, entry] of this.entries) {
       const isMaster = id === this.currentMasterId
-      entry.video.muted = !isMaster
+      // `|| this.masterMuted`: session mute is layered on top of the
+      // one-unmuted-master rule, not a replacement for it - so unmuting later
+      // needs no memory of who "used to" carry the audio, the sweep just
+      // re-derives it.
+      entry.video.muted = !isMaster || this.masterMuted
+      // Volume is still written to the master even while muted, so an unmute
+      // is a pure `muted = false` with the right level already in place (and a
+      // volume step taken while muted is not silently lost).
       if (isMaster) entry.video.volume = this.masterVolume
     }
   }
@@ -415,6 +435,23 @@ export class SyncEngine {
    */
   get volume(): number {
     return this.masterVolume
+  }
+
+  /**
+   * Silences (or un-silences) the whole session without touching play intent,
+   * playback, or `volume`. Goes through the same `applyAudio` sweep as every
+   * other audio change, which is what makes it survive a master handover, a
+   * mid-session rejoin and an element swap with no extra bookkeeping - see
+   * `masterMuted`'s doc comment for why this is a flag and not `setVolume(0)`.
+   */
+  setMuted(muted: boolean): void {
+    this.masterMuted = muted
+    this.applyAudio()
+  }
+
+  /** The engine's session-mute flag - the counterpart of `volume`, for a mute control that has to know what to display. */
+  get muted(): boolean {
+    return this.masterMuted
   }
 
   tick(): void {

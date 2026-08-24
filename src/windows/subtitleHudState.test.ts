@@ -1,6 +1,18 @@
 import { describe, expect, it } from 'vitest'
 import type { Cue, OcSegment } from '../opencast/types'
-import { activeCue, seekFeedback, SEEK_FEEDBACK_CHAPTER_MAX_CHARS } from './subtitleHudState'
+import {
+  activeCue,
+  seekFeedback,
+  SEEK_FEEDBACK_CHAPTER_MAX_CHARS,
+  DEFAULT_SUBTITLE_SCALE,
+  MAX_SUBTITLE_SCALE,
+  MIN_SUBTITLE_SCALE,
+  SUBTITLE_SCALE_LABELS,
+  SUBTITLE_SCALE_STEPS,
+  cycleSubtitleScale,
+  subtitleScaleIndex,
+  subtitleScaleLabel,
+} from './subtitleHudState'
 
 const cues: Cue[] = [
   { startMs: 0, endMs: 2000, text: 'Hallo' },
@@ -55,5 +67,65 @@ describe('seekFeedback', () => {
     const feedback = seekFeedback(segments, 5, 600_000)
     expect(feedback?.chapterTitle).toHaveLength(SEEK_FEEDBACK_CHAPTER_MAX_CHARS)
     expect(feedback?.chapterTitle?.endsWith('...')).toBe(true)
+  })
+})
+
+describe('caption size steps', () => {
+  it('has one label per step, and a default that is one of the steps', () => {
+    expect(SUBTITLE_SCALE_LABELS).toHaveLength(SUBTITLE_SCALE_STEPS.length)
+    expect(SUBTITLE_SCALE_STEPS).toContain(DEFAULT_SUBTITLE_SCALE)
+  })
+
+  it('keeps the steps strictly ascending, with MIN/MAX at the ends', () => {
+    for (let i = 1; i < SUBTITLE_SCALE_STEPS.length; i++) {
+      expect(SUBTITLE_SCALE_STEPS[i]).toBeGreaterThan(SUBTITLE_SCALE_STEPS[i - 1])
+    }
+    expect(MIN_SUBTITLE_SCALE).toBe(SUBTITLE_SCALE_STEPS[0])
+    expect(MAX_SUBTITLE_SCALE).toBe(SUBTITLE_SCALE_STEPS[SUBTITLE_SCALE_STEPS.length - 1])
+  })
+
+  it('defaults well below 1: the raw uikit design size does not fit the magic window', () => {
+    // Not a style preference - see SUBTITLE_SCALE_STEPS' doc comment. This is
+    // the user-reported "passen nicht in das Browserfenster" regression guard:
+    // a future edit that resets the default to 1.0 has to fail a test.
+    expect(DEFAULT_SUBTITLE_SCALE).toBeLessThan(0.5)
+    expect(MAX_SUBTITLE_SCALE).toBeLessThan(0.5)
+    expect(MIN_SUBTITLE_SCALE).toBeGreaterThan(0)
+  })
+
+  it('maps each step to its own index and label', () => {
+    SUBTITLE_SCALE_STEPS.forEach((step, i) => {
+      expect(subtitleScaleIndex(step)).toBe(i)
+      expect(subtitleScaleLabel(step)).toBe(SUBTITLE_SCALE_LABELS[i])
+    })
+  })
+
+  it('snaps a value between two steps to the NEAREST one, not to step 0', () => {
+    const [small, medium] = SUBTITLE_SCALE_STEPS
+    expect(subtitleScaleIndex(small + (medium - small) * 0.9)).toBe(1)
+    expect(subtitleScaleIndex(small + (medium - small) * 0.1)).toBe(0)
+  })
+
+  it('clamps out-of-range and non-finite values to a usable step', () => {
+    expect(subtitleScaleIndex(0)).toBe(0)
+    expect(subtitleScaleIndex(-5)).toBe(0)
+    expect(subtitleScaleIndex(99)).toBe(SUBTITLE_SCALE_STEPS.length - 1)
+    expect(subtitleScaleIndex(Number.NaN)).toBe(SUBTITLE_SCALE_STEPS.indexOf(DEFAULT_SUBTITLE_SCALE))
+  })
+
+  it('cycles forward through every step and wraps round to the smallest', () => {
+    let scale = SUBTITLE_SCALE_STEPS[0]
+    const seen: number[] = [scale]
+    for (let i = 1; i < SUBTITLE_SCALE_STEPS.length; i++) {
+      scale = cycleSubtitleScale(scale)
+      seen.push(scale)
+    }
+    expect(seen).toEqual([...SUBTITLE_SCALE_STEPS])
+    expect(cycleSubtitleScale(MAX_SUBTITLE_SCALE)).toBe(MIN_SUBTITLE_SCALE)
+  })
+
+  it('always cycles to a real step, even from a value that is not one', () => {
+    expect(SUBTITLE_SCALE_STEPS).toContain(cycleSubtitleScale(0.9137))
+    expect(SUBTITLE_SCALE_STEPS).toContain(cycleSubtitleScale(Number.NaN))
   })
 })

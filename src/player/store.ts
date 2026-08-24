@@ -2,6 +2,19 @@ import { createStore } from 'zustand'
 import type { Cue, Episode } from '../opencast/types'
 import type { OpencastClient } from '../opencast/client'
 import { selectStreams } from '../opencast/selectTracks'
+// The one import that points from `player/` into `windows/`, against this
+// app's usual direction (windows read the store, not the other way round).
+// Deliberate: `subtitleScale`'s default has to BE one of the size steps the
+// dock's own button cycles through, and a second copy of that number here
+// would silently drift from the steps array the moment either is retuned -
+// which is exactly the class of bug the browser-first retune was fixing. The
+// module holds pure constants and pure functions only, and imports nothing
+// from `player/`, so there is no cycle.
+import {
+  DEFAULT_SUBTITLE_SCALE,
+  MAX_SUBTITLE_SCALE,
+  MIN_SUBTITLE_SCALE,
+} from '../windows/subtitleHudState'
 import { SyncEngine } from './syncEngine'
 import { createStreamElement, destroyStreamElement } from './mediaElements'
 
@@ -30,6 +43,31 @@ export interface StreamState {
   error?: string
 }
 
+/**
+ * Where browse mode should land when the player leaves an episode - the seam
+ * the dock's breadcrumb needed. `LibraryWindow` has always opened at level 1
+ * (the series list); a „Reihe" crumb has to open it at level 2, already scoped
+ * to that series.
+ *
+ * Carried as a ONE-SHOT value on the store rather than as a prop or a
+ * `LibraryWindow` mount key: `toBrowse` is what tears player mode down, and
+ * `LibraryWindow` does not exist yet at that moment (App.tsx swaps the trees
+ * on `mode`), so the intent has to survive the switch. `consumeBrowseTarget`
+ * is what makes it one-shot - the window applies it once and it is gone, so a
+ * later „< Zurück" inside the library goes to level 1 as normal instead of
+ * being dragged back into the series it was opened at.
+ *
+ * `title` is carried along rather than looked up again: the crumb already knows
+ * the series' display name (from the open episode's `seriesTitle`), and
+ * `enterSeries` wants one immediately - without it the level-2 header would
+ * read as a raw series id until an unrelated fetch happened to fill it in.
+ */
+export interface BrowseTarget {
+  kind: 'series'
+  sid: string
+  title: string
+}
+
 export interface PlayerStore {
   mode: 'browse' | 'player'
   client: OpencastClient
@@ -38,6 +76,39 @@ export interface PlayerStore {
   streams: StreamState[]
   cues: Cue[]
   subtitlesOn: boolean
+  /**
+   * How large the head-locked caption HUD renders, as the uniform scale
+   * `SubtitleHud` applies via a `<group scale>` around `<HeadLocked>` (the
+   * mechanism sphere-shell's README documents for rescaling a head-locked
+   * container). Lives here, not in the HUD's own `useState`, because the
+   * control that changes it is in the DOCK and the thing it changes is the HUD
+   * - two different subtrees, so there is no component that could own it.
+   *
+   * A plain number rather than a step index: the store's job is to hold one
+   * clamped, positive scale, and WHICH values are offered is the dock's
+   * business (`SUBTITLE_SCALE_STEPS` in `windows/subtitleHudState.ts`). See
+   * `setSubtitleScale`.
+   */
+  subtitleScale: number
+  /**
+   * Master volume as reactive state, mirrored into the engine by `setVolume`.
+   *
+   * `ControlsWindow` used to hold this in local `useState`, with a doc comment
+   * spelling out the condition for that being safe: exactly one writer.
+   * „Stummschalten" is the second writer this round adds, and the volume
+   * control moved to the dock at the same time - so the local mirror would now
+   * go stale exactly the way the play-intent mirror did before `playing`
+   * existed. Same fix, same shape: one reactive field, one action.
+   */
+  volume: number
+  /**
+   * Session mute (spec: „Ton stumm"), mirrored into the engine by `setMuted`.
+   * Distinct from `volume === 0`: muting must not destroy the level to come
+   * back to, and „ist stumm" is a different question from „ist leise" for
+   * anything that renders an icon off it. The engine owns the actual audio
+   * discipline (see `SyncEngine.setMuted`); this is the reactive mirror.
+   */
+  muted: boolean
   /** One instance, lives in the store for the whole session - see syncEngine.ts. */
   engine: SyncEngine
   /** Mirrored from `engine.currentTime` on every tick - see `tickOnce`. */
@@ -60,6 +131,12 @@ export interface PlayerStore {
    * now goes through `setPlaying`, so there is no second copy to go stale.
    */
   playing: boolean
+  /**
+   * Set by `toBrowse(target)` and cleared by `consumeBrowseTarget()` - see
+   * `BrowseTarget`. `null` means "browse opens at level 1", which is every
+   * path except the breadcrumb's „Reihe" crumb.
+   */
+  browseTarget: BrowseTarget | null
   openEpisode(id: string): Promise<void>
   /**
    * The ONLY way to change play intent. Drives `engine.play()`/`engine.pause()`
@@ -157,8 +234,41 @@ export interface PlayerStore {
    * replace, and `reopenStream` is that path.
    */
   reloadStream(flavorType: string): void
-  toBrowse(): void
+  /**
+   * Leaves player mode. With a `target`, browse mode opens directly at that
+   * series' episode list instead of at level 1 - see `BrowseTarget`.
+   */
+  toBrowse(target?: BrowseTarget): void
+  /**
+   * Reads and clears `browseTarget` in one step, so it can only ever be
+   * applied once (`LibraryWindow`'s mount effect is the only caller). A plain
+   * `browseTarget` read plus a separate `clearBrowseTarget()` would leave a
+   * window - a re-fired effect, a StrictMode double-invoke - in which the
+   * target is applied twice, which for `enterSeries` means a second,
+   * pointless page-1 fetch of the same series.
+   */
+  consumeBrowseTarget(): BrowseTarget | null
   setSubtitles(on: boolean): void
+  /**
+   * The ONLY way to change caption size. Clamps to the range the size steps
+   * live in, so no caller can drive the HUD to an unreadable or absurd scale
+   * (and a NaN can never reach a `<group scale>`, where it would silently make
+   * the whole HUD disappear rather than error).
+   */
+  setSubtitleScale(next: number): void
+  /**
+   * The ONLY way to change master volume: drives `engine.setVolume` and
+   * mirrors the value into `volume` in the same synchronous block, exactly as
+   * `setPlaying` does for play intent. Clamped to [0, 1] - the range a real
+   * `HTMLMediaElement.volume` accepts at all.
+   */
+  setVolume(v: number): void
+  /**
+   * The ONLY way to change session mute: drives `engine.setMuted` and mirrors
+   * it into `muted`. Deliberately independent of `volume` - see the field's own
+   * doc comment and `SyncEngine.setMuted`.
+   */
+  setMuted(on: boolean): void
   setSeekPreview(s: number | null): void
   canClose(flavorType: string): boolean
   /**
@@ -254,11 +364,20 @@ export function createPlayerStore(client: OpencastClient) {
       streams: [],
       cues: [],
       subtitlesOn: true,
+      subtitleScale: DEFAULT_SUBTITLE_SCALE,
+      // These two seed the mirror to `SyncEngine`'s own constructor defaults
+      // (masterVolume 1, masterMuted false). Asserted in store.test.tsx rather
+      // than left as a comment, so a change to either default that forgets the
+      // other fails a test instead of shipping a UI that shows the wrong icon
+      // until the user's first click.
+      volume: 1,
+      muted: false,
       engine: new SyncEngine({ onStall: (stalled) => set({ stalled }) }),
       currentTimeS: 0,
       seekPreviewS: null,
       stalled: false,
       playing: false,
+      browseTarget: null,
 
       async openEpisode(id) {
         // Idempotent: re-opening the episode that's already showing (a
@@ -437,7 +556,7 @@ export function createPlayerStore(client: OpencastClient) {
         }))
       },
 
-      toBrowse() {
+      toBrowse(target) {
         stopTicking()
         // Invalidates any open still in flight: without this, a tile click
         // followed quickly by „Bibliothek" would drag the user back into player
@@ -456,7 +575,22 @@ export function createPlayerStore(client: OpencastClient) {
           currentTimeS: 0,
           seekPreviewS: null,
           stalled: false,
+          // `?? null` rather than a conditional spread: an ordinary
+          // toBrowse() must CLEAR any target left over from an earlier one,
+          // not inherit it. Otherwise a „Reihe" crumb click, followed by
+          // opening an episode and later going back with the „Home" crumb,
+          // would land in that same series again.
+          browseTarget: target ?? null,
         })
+      },
+
+      consumeBrowseTarget() {
+        const target = get().browseTarget
+        // Only writes when there is something to clear - a no-op call (the
+        // common case: browse opened at level 1) must not push a new state
+        // object at every subscriber.
+        if (target !== null) set({ browseTarget: null })
+        return target
       },
 
       setPlaying(next) {
@@ -470,6 +604,28 @@ export function createPlayerStore(client: OpencastClient) {
 
       setSubtitles(on) {
         set({ subtitlesOn: on })
+      },
+
+      setSubtitleScale(next) {
+        // NaN/Infinity fall through to the default rather than to a clamp
+        // bound: `Math.min/max` with NaN yields NaN, and a NaN reaching a
+        // `<group scale>` makes the whole HUD silently vanish (no error, no
+        // console warning) - the worst possible failure for a caption.
+        const safe = Number.isFinite(next) ? next : DEFAULT_SUBTITLE_SCALE
+        set({ subtitleScale: Math.min(MAX_SUBTITLE_SCALE, Math.max(MIN_SUBTITLE_SCALE, safe)) })
+      },
+
+      setVolume(v) {
+        const safe = Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : get().volume
+        // Engine first, mirror in the same synchronous block - the `setPlaying`
+        // discipline, so no observer can see the two disagree.
+        get().engine.setVolume(safe)
+        set({ volume: safe })
+      },
+
+      setMuted(on) {
+        get().engine.setMuted(on)
+        set({ muted: on })
       },
 
       setSeekPreview(s) {
