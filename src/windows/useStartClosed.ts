@@ -31,6 +31,23 @@ import { useShellStore, useWindowState } from 'sphere-shell'
  * the user's own restore (from the dock tile) would be undone on the very next
  * commit.
  *
+ * ## ...and why the guard resets when the window UNREGISTERS
+ *
+ * Once-ever was wrong, on a path the dock's own previous/next buttons walk
+ * (code review, I3). Two of the four panels unregister when the open recording
+ * has nothing for them: step from a recording WITH chapters (Kapitel
+ * registered, then closed by this hook) to a sibling WITHOUT (Kapitel returns
+ * `null`, so `<Window>` unregisters and the entry is gone), then back to one
+ * with - and Kapitel registers afresh, open, popping onto the shell in the
+ * middle of a lecture the user never asked it for.
+ *
+ * A window that has left the shell's registry is a NEW window when it comes
+ * back: it has no `closed` flag, no dock tile and no position of its own any
+ * more. So the ref follows the registration rather than the component - cleared
+ * the moment the entry goes away, re-applied when a fresh one appears. The
+ * user's own restore is still safe, because a restore does not unregister
+ * anything; only the data gate flipping (or player mode unmounting) does.
+ *
  * Writes through the SHELL store, never through a player-store flag - the shell
  * owns open/closed; see `panelWindows.ts`.
  */
@@ -40,9 +57,14 @@ export function useStartClosed(id: string): void {
   const applied = useRef(false)
 
   useEffect(() => {
+    // Not registered (first render, or gated off by the window's own data).
+    // Arm for the NEXT registration - see the doc comment: a window that left
+    // the registry comes back as a new one.
+    if (!entry) {
+      applied.current = false
+      return
+    }
     if (applied.current) return
-    // Not registered yet (first render), or gated off by the window's own data.
-    if (!entry) return
     applied.current = true
     shellStore.getState().close(id)
   }, [entry, id, shellStore])
