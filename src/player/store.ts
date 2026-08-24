@@ -8,7 +8,12 @@ import { selectStreams } from '../opencast/selectTracks'
 // this layer and `windows/` need the constants, and a second copy of the
 // default here would silently drift from the steps array the moment either is
 // retuned. Same arrangement as `src/time.ts`.
-import { DEFAULT_CAPTION_SCALE, MAX_CAPTION_SCALE, MIN_CAPTION_SCALE } from '../captionScale'
+import {
+  DEFAULT_CAPTION_OFFSET_DEG,
+  DEFAULT_CAPTION_SCALE,
+  clampCaptionOffset,
+  clampCaptionScale,
+} from '../captionScale'
 import { SyncEngine } from './syncEngine'
 import { createStreamElement, destroyStreamElement } from './mediaElements'
 
@@ -81,11 +86,26 @@ export interface PlayerStore {
    * HUD - two different subtrees, so there is no component that could own it.
    *
    * A plain number rather than a step index: the store's job is to hold one
-   * clamped, positive scale, and WHICH values are offered is the dock's
-   * business (`CAPTION_SCALE_STEPS` in `../captionScale.ts`). See
+   * clamped, positive scale, and WHICH values a press offers is the dock's
+   * business (`stepCaptionScale` in `../captionScale.ts`). See
    * `setSubtitleScale`.
    */
   subtitleScale: number
+  /**
+   * How far the head-locked caption is nudged UP (positive) or DOWN from where
+   * `<HeadLocked>` rests it, in degrees of pitch - the user's „Rauf/Runter-
+   * Button, um die Schrift in der fixierten Position zu verschieben".
+   *
+   * Here rather than in the HUD's own `useState` for exactly the reason
+   * `subtitleScale` is: the controls that change it are in the DOCK and the
+   * thing they move is the HUD, two subtrees with no common component below
+   * `<App>`. `SubtitleHud` adds it to `<HeadLocked config={{ offsetPitchDeg }}>`
+   * (sphere-shell's per-instance override), so the whole HUD moves as one -
+   * including the transient seek readout above the caption, which is the honest
+   * behaviour: the two are one stack, and moving only half of it would let them
+   * overlap.
+   */
+  subtitleOffsetDeg: number
   /**
    * Master volume as reactive state, mirrored into the engine by `setVolume`.
    *
@@ -248,10 +268,17 @@ export interface PlayerStore {
   /**
    * The ONLY way to change caption size. Clamps to the range the size steps
    * live in, so no caller can drive the HUD to an unreadable or absurd scale
-   * (and a NaN can never reach a `<group scale>`, where it would silently make
-   * the whole HUD disappear rather than error).
+   * (and a NaN can never reach the HUD's own pixel arithmetic, where it would
+   * silently make the caption disappear rather than error).
    */
   setSubtitleScale(next: number): void
+  /**
+   * The ONLY way to move the caption vertically. Same clamping discipline as
+   * `setSubtitleScale`, against `../captionScale.ts`'s offset range - a pitch
+   * outside it either puts the caption on the video it is captioning or buries
+   * it in the dock, and a NaN one puts the HUD nowhere at all.
+   */
+  setSubtitleOffset(next: number): void
   /**
    * The ONLY way to change master volume: drives `engine.setVolume` and
    * mirrors the value into `volume` in the same synchronous block, exactly as
@@ -361,6 +388,7 @@ export function createPlayerStore(client: OpencastClient) {
       cues: [],
       subtitlesOn: true,
       subtitleScale: DEFAULT_CAPTION_SCALE,
+      subtitleOffsetDeg: DEFAULT_CAPTION_OFFSET_DEG,
       // These two seed the mirror to `SyncEngine`'s own constructor defaults
       // (masterVolume 1, masterMuted false). Asserted in store.test.tsx rather
       // than left as a comment, so a change to either default that forgets the
@@ -603,12 +631,15 @@ export function createPlayerStore(client: OpencastClient) {
       },
 
       setSubtitleScale(next) {
-        // NaN/Infinity fall through to the default rather than to a clamp
-        // bound: `Math.min/max` with NaN yields NaN, and a NaN reaching a
-        // `<group scale>` makes the whole HUD silently vanish (no error, no
-        // console warning) - the worst possible failure for a caption.
-        const safe = Number.isFinite(next) ? next : DEFAULT_CAPTION_SCALE
-        set({ subtitleScale: Math.min(MAX_CAPTION_SCALE, Math.max(MIN_CAPTION_SCALE, safe)) })
+        // The clamp - including the NaN/Infinity handling, where `Math.min/max`
+        // would happily yield a NaN, and a NaN caption size makes the caption
+        // silently vanish - lives in `clampCaptionScale` next to the range it
+        // enforces, so the store cannot drift from it.
+        set({ subtitleScale: clampCaptionScale(next) })
+      },
+
+      setSubtitleOffset(next) {
+        set({ subtitleOffsetDeg: clampCaptionOffset(next) })
       },
 
       setVolume(v) {

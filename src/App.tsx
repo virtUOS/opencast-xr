@@ -11,6 +11,7 @@ import { WindowShell } from 'sphere-shell'
 import { SHELL_RADIUS, xrStore } from './xrStore'
 import { VerificationHandle } from './verificationHandle'
 import { OpencastClient } from './opencast/client'
+import { captionPrefsStorage, readCaptionPrefs, writeCaptionPrefs } from './captionPrefs'
 import { createPlayerStore } from './player/store'
 import { LibraryWindow } from './windows/LibraryWindow'
 import { VideoWindows } from './windows/VideoWindows'
@@ -77,6 +78,33 @@ export function App() {
   const playerStore = useMemo(() => createPlayerStore(client), [client])
   useEffect(() => {
     return () => playerStore.getState().dispose()
+  }, [playerStore])
+
+  // Caption size and position survive a reload - they are accessibility
+  // settings, and one that has to be re-found and re-pressed on every visit is
+  // one that gets pressed once and then endured. See `captionPrefs.ts` for why
+  // only these two persist, and why every read and write is total (a missing,
+  // corrupt or hostile value, and a storage that throws outright, all end up at
+  // the defaults rather than at an exception or a NaN in the HUD).
+  //
+  // Here rather than inside the store, so the store stays free of I/O and
+  // stays testable without a DOM. Applied through the store's own actions, so
+  // the one-writer discipline holds: this is not a second path into those
+  // fields, it is a caller of the only path.
+  useEffect(() => {
+    const storage = captionPrefsStorage()
+    const prefs = readCaptionPrefs(storage)
+    playerStore.getState().setSubtitleScale(prefs.scale)
+    playerStore.getState().setSubtitleOffset(prefs.offsetDeg)
+    // Written on every change rather than on unmount: a tab that is closed (or
+    // a headset session that ends) never runs an unmount handler reliably, and
+    // the write is one small `setItem` on a control the user presses by hand.
+    let last = prefs
+    return playerStore.subscribe((state) => {
+      if (state.subtitleScale === last.scale && state.subtitleOffsetDeg === last.offsetDeg) return
+      last = { scale: state.subtitleScale, offsetDeg: state.subtitleOffsetDeg }
+      writeCaptionPrefs(storage, last)
+    })
   }, [playerStore])
   const mode = useStore(playerStore, (s) => s.mode)
 

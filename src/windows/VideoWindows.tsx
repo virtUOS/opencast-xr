@@ -204,17 +204,23 @@ function StreamErrorTile({
  * `element` is passed in rather than read here: see `VideoWindows`.
  */
 function VideoWindow({
-  store, flavorType, index, element, error,
+  store, flavorType, index, streamCount, element, error,
 }: {
   store: PlayerStoreApi
   flavorType: string
   index: number
+  /**
+   * How many streams the open recording has. Part of the PLACEMENT, not just
+   * bookkeeping: a lone stream gets the whole comfortable arc and a pair splits
+   * it - see `videoWindowPlacement`.
+   */
+  streamCount: number
   element: HTMLVideoElement | undefined
   error: string | undefined
 }) {
   useStreamWindowSync(store, flavorType)
   useStreamErrorWatch(store, flavorType, element)
-  const placement = useMemo(() => videoWindowPlacement(index), [index])
+  const placement = useMemo(() => videoWindowPlacement(index, streamCount), [index, streamCount])
   // Only the error tile reads this (a primitive derivation over `streams`, so
   // subscribing to it costs nothing when no error is showing).
   const canClose = useStore(store, (s) => s.canClose(flavorType))
@@ -281,6 +287,7 @@ export function VideoWindows({ store }: { store: PlayerStoreApi }) {
           store={store}
           flavorType={stream.flavorType}
           index={index}
+          streamCount={streams.length}
           element={stream.open ? store.getState().getElement(stream.flavorType) : undefined}
           error={stream.error}
         />

@@ -4,6 +4,8 @@ import { Container, Text, type VanillaContainer } from '@react-three/uikit'
 import { Window } from 'sphere-shell'
 import type { PlayerStoreApi } from '../player/store'
 import { activeCueIndex, shouldAutoScroll, transcriptRows } from './transcriptState'
+import { PANEL_WINDOW_IDS } from './panelWindows'
+import { useStartClosed } from './useStartClosed'
 
 // Same reserved-but-unused flank azimuth family as `videoWindowState.ts`'s
 // SIDE_AZIMUTH_DEG (55) and `chaptersState.ts`'s CHAPTERS_AZIMUTH_DEG
@@ -91,6 +93,8 @@ const EMPTY_TEXT = 'Kein Transkript.' // unreachable in practice - this componen
  * own to show for this task, only the synthetic one.
  */
 export function TranscriptWindow({ store }: { store: PlayerStoreApi }) {
+  // Starts as a dock tile rather than on the shell - see `panelWindows.ts`.
+  useStartClosed(PANEL_WINDOW_IDS.transcript)
   const cues = useStore(store, (s) => s.cues)
   const durationMs = useStore(store, (s) => s.episode?.durationMs ?? 0)
   const currentTimeS = useStore(store, (s) => s.currentTimeS)

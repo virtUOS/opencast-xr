@@ -2,8 +2,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { OpencastClient } from '../opencast/client'
 import { derivePlaybackVisualState } from '../windows/transportState'
 import {
+  DEFAULT_CAPTION_OFFSET_DEG,
   DEFAULT_CAPTION_SCALE,
+  MAX_CAPTION_OFFSET_DEG,
   MAX_CAPTION_SCALE,
+  MIN_CAPTION_OFFSET_DEG,
   MIN_CAPTION_SCALE,
 } from '../captionScale'
 import { createPlayerStore, type PlayerStoreApi } from './store'
@@ -865,6 +868,46 @@ describe('createPlayerStore', () => {
       expect(store.getState().subtitleScale).toBe(MAX_CAPTION_SCALE)
       store.getState().toBrowse()
       expect(store.getState().subtitleScale).toBe(MAX_CAPTION_SCALE)
+    })
+  })
+
+  describe('setSubtitleOffset', () => {
+    it('starts where <HeadLocked> rests the HUD, and stores a value inside the range', () => {
+      const { client } = makeClient()
+      const store = makeStore(client)
+      expect(store.getState().subtitleOffsetDeg).toBe(DEFAULT_CAPTION_OFFSET_DEG)
+
+      store.getState().setSubtitleOffset(MAX_CAPTION_OFFSET_DEG)
+      expect(store.getState().subtitleOffsetDeg).toBe(MAX_CAPTION_OFFSET_DEG)
+      store.getState().setSubtitleOffset(MIN_CAPTION_OFFSET_DEG)
+      expect(store.getState().subtitleOffsetDeg).toBe(MIN_CAPTION_OFFSET_DEG)
+    })
+
+    it('clamps, and never lets a non-finite pitch through', () => {
+      // A NaN pitch does not error - it puts the HUD nowhere at all, which for
+      // a caption is indistinguishable from "subtitles are broken".
+      const { client } = makeClient()
+      const store = makeStore(client)
+
+      store.getState().setSubtitleOffset(90)
+      expect(store.getState().subtitleOffsetDeg).toBe(MAX_CAPTION_OFFSET_DEG)
+      store.getState().setSubtitleOffset(-90)
+      expect(store.getState().subtitleOffsetDeg).toBe(MIN_CAPTION_OFFSET_DEG)
+      store.getState().setSubtitleOffset(Number.NaN)
+      expect(store.getState().subtitleOffsetDeg).toBe(DEFAULT_CAPTION_OFFSET_DEG)
+      expect(Number.isFinite(store.getState().subtitleOffsetDeg)).toBe(true)
+    })
+
+    it('survives an episode swap and a return to browse - a viewer preference, not episode state', async () => {
+      const { client } = makeClient()
+      const store = makeStore(client)
+      store.getState().setSubtitleOffset(MAX_CAPTION_OFFSET_DEG)
+
+      await store.getState().openEpisode('ep-1')
+      expect(store.getState().subtitleOffsetDeg).toBe(MAX_CAPTION_OFFSET_DEG)
+      await store.getState().openEpisode('ep-2')
+      store.getState().toBrowse()
+      expect(store.getState().subtitleOffsetDeg).toBe(MAX_CAPTION_OFFSET_DEG)
     })
   })
 

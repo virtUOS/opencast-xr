@@ -10,6 +10,9 @@ import {
   streamWindowAction,
   videoWindowId,
   videoWindowPlacement,
+  PAIR_AZIMUTH_DEG,
+  PAIR_WIDTH_DEG,
+  SOLO_WIDTH_DEG,
   type StreamWindowSyncInput,
 } from './videoWindowState'
 
@@ -50,48 +53,96 @@ describe('streamErrorEscapeHint', () => {
 })
 
 describe('videoWindowPlacement', () => {
-  it('puts the first two streams at +-24 deg, 40 deg wide, on the horizon', () => {
-    expect(videoWindowPlacement(0)).toEqual({
+  it('gives a lone stream the whole comfortable arc, centred', () => {
+    // „Am Start nur die Videofenster einblenden und das moeglichst gross" -
+    // and one stream is the normal case for a real Opencast recording.
+    expect(videoWindowPlacement(0, 1)).toEqual({
+      size: { width: SOLO_WIDTH_DEG, height: SOLO_WIDTH_DEG / VIDEO_ASPECT },
+      position: { azimuth: 0, elevation: 0 },
+    })
+  })
+
+  it('gives a PAIR as much width as fits without leaving the comfortable arc', () => {
+    expect(videoWindowPlacement(0, 2)).toEqual({
+      size: { width: PAIR_WIDTH_DEG, height: PAIR_WIDTH_DEG / VIDEO_ASPECT },
+      position: { azimuth: -PAIR_AZIMUTH_DEG, elevation: 0 },
+    })
+    expect(videoWindowPlacement(1, 2)).toEqual({
+      size: { width: PAIR_WIDTH_DEG, height: PAIR_WIDTH_DEG / VIDEO_ASPECT },
+      position: { azimuth: PAIR_AZIMUTH_DEG, elevation: 0 },
+    })
+  })
+
+  it('is bigger than it used to be - that is the whole point of the round', () => {
+    // The regression guard for the directive: a later edit that quietly puts
+    // one or two streams back at the old 40 degrees fails here.
+    expect(videoWindowPlacement(0, 1).size.width).toBeGreaterThan(MAIN_WIDTH_DEG)
+    expect(videoWindowPlacement(0, 2).size.width).toBeGreaterThan(MAIN_WIDTH_DEG)
+  })
+
+  it('keeps one and two streams inside the +-55 deg comfortable arc', () => {
+    // Wider than this needs a head turn to read, which is the constraint the
+    // sizes were derived from (a Quest 3 sees about 110 degrees at once).
+    for (const [index, count] of [[0, 1], [0, 2], [1, 2]] as const) {
+      const { size, position } = videoWindowPlacement(index, count)
+      expect(Math.abs(position.azimuth) + size.width / 2).toBeLessThanOrEqual(55)
+    }
+  })
+
+  it('keeps one and two streams clear of the dock at -30 deg', () => {
+    for (const [index, count] of [[0, 1], [0, 2], [1, 2]] as const) {
+      const { size, position } = videoWindowPlacement(index, count)
+      expect(position.elevation - size.height / 2).toBeGreaterThan(-26)
+    }
+  })
+
+  it('leaves the two main windows at their old +-24 deg once a THIRD stream exists', () => {
+    // With a flank pair already out at +-55 there is no width left to give.
+    expect(videoWindowPlacement(0, 3)).toEqual({
       size: { width: MAIN_WIDTH_DEG, height: MAIN_WIDTH_DEG / VIDEO_ASPECT },
       position: { azimuth: -MAIN_AZIMUTH_DEG, elevation: 0 },
     })
-    expect(videoWindowPlacement(1)).toEqual({
-      size: { width: MAIN_WIDTH_DEG, height: MAIN_WIDTH_DEG / VIDEO_ASPECT },
-      position: { azimuth: MAIN_AZIMUTH_DEG, elevation: 0 },
-    })
+    expect(videoWindowPlacement(1, 3).position).toEqual({ azimuth: MAIN_AZIMUTH_DEG, elevation: 0 })
   })
 
   it('puts the third and fourth streams at +-55 deg, 24 deg wide, on the horizon', () => {
-    expect(videoWindowPlacement(2).size).toEqual({
+    expect(videoWindowPlacement(2, 4).size).toEqual({
       width: SIDE_WIDTH_DEG,
       height: SIDE_WIDTH_DEG / VIDEO_ASPECT,
     })
-    expect(videoWindowPlacement(2).position).toEqual({ azimuth: -SIDE_AZIMUTH_DEG, elevation: 0 })
-    expect(videoWindowPlacement(3).position).toEqual({ azimuth: SIDE_AZIMUTH_DEG, elevation: 0 })
+    expect(videoWindowPlacement(2, 4).position).toEqual({ azimuth: -SIDE_AZIMUTH_DEG, elevation: 0 })
+    expect(videoWindowPlacement(3, 4).position).toEqual({ azimuth: SIDE_AZIMUTH_DEG, elevation: 0 })
   })
 
   it('stacks further flank pairs downward instead of widening the arc', () => {
-    const row1 = videoWindowPlacement(4)
+    const row1 = videoWindowPlacement(4, 6)
     expect(row1.position.azimuth).toBe(-SIDE_AZIMUTH_DEG)
     expect(row1.position.elevation).toBeLessThan(0)
     // One full window height plus the gap below its own row-0 neighbour.
     expect(row1.position.elevation).toBeCloseTo(
       -(SIDE_WIDTH_DEG / VIDEO_ASPECT + SIDE_ROW_GAP_DEG), 10,
     )
-    expect(videoWindowPlacement(5).position).toEqual({
+    expect(videoWindowPlacement(5, 6).position).toEqual({
       azimuth: SIDE_AZIMUTH_DEG,
       elevation: row1.position.elevation,
     })
-    expect(videoWindowPlacement(6).position.elevation).toBeCloseTo(2 * row1.position.elevation, 10)
+    expect(videoWindowPlacement(6, 8).position.elevation).toBeCloseTo(2 * row1.position.elevation, 10)
   })
 
   it('keeps every window inside the shell default bounds up to six streams', () => {
     for (let i = 0; i < 6; i++) {
-      const { position } = videoWindowPlacement(i)
+      const { position } = videoWindowPlacement(i, 6)
       expect(Math.abs(position.azimuth)).toBeLessThanOrEqual(110)
       expect(position.elevation).toBeGreaterThanOrEqual(-40)
       expect(position.elevation).toBeLessThanOrEqual(60)
     }
+  })
+
+  it('never sizes a window as if it were alone when its own index says otherwise', () => {
+    // A caller mid-swap (or a defensive 0) must not hand stream 1 the solo
+    // layout, which would stack two windows on top of each other at azimuth 0.
+    expect(videoWindowPlacement(1, 0).position.azimuth).not.toBe(0)
+    expect(videoWindowPlacement(1, 1)).toEqual(videoWindowPlacement(1, 2))
   })
 })
 

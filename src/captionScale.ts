@@ -1,18 +1,16 @@
 /**
- * ## Caption size: the steps, and why they are all well under 1
+ * ## Caption size and vertical position: the scale, the offset, and why the
+ * numbers are what they are
  *
- * A leaf module on purpose. `subtitleScale` lives on the player store (one
- * writer, `setSubtitleScale`), the control that changes it is in
- * `windows/DockTransport.tsx`, and the thing it changes is
+ * A leaf module on purpose. `subtitleScale`/`subtitleOffsetDeg` live on the
+ * player store (one writer each), the controls that change them are in
+ * `windows/DockTransport.tsx`, and the thing they change is
  * `windows/SubtitleHud.tsx` - so the constants have to be reachable from both
- * `player/` and `windows/`. They started out in `windows/subtitleHudState.ts`,
- * which forced `player/store.ts` to import from `windows/` against this app's
- * usual direction (windows read the store, not the other way round). Sitting at
- * `src/` with no imports of its own, this module removes that exception rather
- * than documenting it - and it is the same shape as `src/time.ts`, the other
- * thing both layers need.
+ * `player/` and `windows/`. Sitting at `src/` with no imports of its own, this
+ * module keeps `player/store.ts` from having to import out of `windows/`
+ * against this app's usual direction - the same arrangement as `src/time.ts`.
  *
- * ### The mechanism the numbers refer to
+ * ### The size mechanism the numbers refer to
  *
  * `subtitleScale` multiplies the caption panel's own design pixels - font size,
  * padding, corner radius and `maxWidth` all by the SAME factor (see
@@ -22,15 +20,7 @@
  * and uikit draws glyphs from an SDF atlas, so the result stays crisp at any
  * factor.
  *
- * It used to be a `<group scale>` around the whole `<HeadLocked>`, which
- * sphere-shell's README documents as the supported way to resize a head-locked
- * container. That worked, but it also scaled the seek-feedback panel that
- * shares the HUD - and the user asked for adjustable SUBTITLES, not adjustable
- * scrub feedback. Multiplying the caption panel's own pixels confines the
- * change to the caption. The world sizes below are unaffected: px * 0.01 m/px
- * is the same number either way, and they were re-measured after the switch.
- *
- * ### Why the steps are all well under 1
+ * ### Why the scale is well under 1
  *
  * The raw design size is enormous in world space: the caption panel is
  * `CAPTION_MAX_WIDTH_PX` + padding wide at uikit's fixed 0.01 m/px - about
@@ -38,7 +28,31 @@
  * 70-degree frustum is only about 2.7 m wide. That is the „passen nicht in das
  * Browserfenster" the user reported. So `1.0` is not a sensible default here.
  *
- * ### The measurements these came from
+ * ### From three steps to a continuous ladder (Quest feedback, round 2)
+ *
+ * This used to be three fixed steps (S 0.18 / M 0.24 / L 0.32) behind one
+ * cycling button. Judged through the headset's lenses, „L ist zu gross ... S ist
+ * gefuehlt auch noch ein wenig zu gross", and the ask was for plain `-`/`+`
+ * buttons instead of a cycle. So:
+ *
+ * - the ladder is now MULTIPLICATIVE - one press changes the caption by
+ *   `CAPTION_SCALE_STEP` (12 %) of its current size. A fixed additive step
+ *   cannot serve both ends of a 3.5x range: 0.02 is a 22 % jump at the small
+ *   end and a 6 % nudge at the large one. A constant ratio is the same
+ *   perceived change everywhere, which is what „einfach einstellbar" means when
+ *   the user cannot see a number;
+ * - `DEFAULT_CAPTION_SCALE` is **0.16** - just below the old S (0.18), which is
+ *   the direction the feedback points, without overshooting into illegible;
+ * - `MIN_CAPTION_SCALE` is **0.09**, well below the new default (five presses),
+ *   because „a wenig zu gross" is a judgement made through lenses this project
+ *   cannot see through, and the floor has to leave room for it to be wrong
+ *   again in the same direction;
+ * - `MAX_CAPTION_SCALE` stays **0.32**. It was measured, not guessed: at 0.40
+ *   the panel is 2.07 m wide, 102 % of a 4:3 canvas, and clips both edges
+ *   (measured `insideCanvas: false`, NDC x spanning -1.019..1.017). 0.32 is the
+ *   largest step that clears both edges at the narrow aspect.
+ *
+ * ### The measurements the range came from
  *
  * Measured live in the magic window (world AABB of the caption panel's own
  * subtree, projected through the live camera) at 640x480 - aspect 1.33, the
@@ -56,61 +70,104 @@
  * ratio, since the panel's world width does not depend on aspect. Widths are
  * for a two-line cue at the panel's full width; a shorter cue is narrower.)
  *
- * 0.4 was the first draft's largest step and it does not fit a 4:3 window at
- * all (measured `insideCanvas: false`, NDC x spanning -1.019..1.017), which is
- * exactly the reported bug in miniature - hence the ladder below stops at 0.32,
- * where even the largest step clears both edges at 4:3.
+ * ### The vertical offset
  *
- * RETUNED BROWSER-FIRST. The Quest look is unverified - a headset renders each
- * eye through its own narrower frustum, so these may well read as too SMALL
- * there. See `docs/QUEST-VALIDATION-PLAYER.md`.
+ * `subtitleOffsetDeg` is added to `<HeadLocked>`'s `offsetPitchDeg`, which is
+ * where the HUD rests relative to the smoothed gaze direction (sphere-shell's
+ * `DEFAULT_HEADLOCKED.offsetPitchDeg` is -15, i.e. „below the primary
+ * content"). POSITIVE moves the caption UP, negative down, which is the way
+ * round the dock's up/down buttons read.
+ *
+ * The range is deliberately asymmetric-free and modest: +-12 degrees around the
+ * default, in 3-degree steps (four presses each way). Beyond about +12 the
+ * caption crosses the middle of the field of view - i.e. lands on the video it
+ * is captioning - and below about -27 total it is at the elevation the dock
+ * itself occupies (-30). Neither is a state a control should be able to reach
+ * by holding a button down.
  */
 
-// Typed `readonly number[]` rather than `as const`: a tuple of literal types
-// would make every derived constant (the default, MIN/MAX) a literal type too,
-// which then fights every ordinary `number` it is compared or assigned to.
-export const CAPTION_SCALE_STEPS: readonly number[] = [0.18, 0.24, 0.32]
+/** The smallest and largest caption scale the store will accept. See above. */
+export const MIN_CAPTION_SCALE = 0.09
+export const MAX_CAPTION_SCALE = 0.32
 
-/** One-character labels for `CAPTION_SCALE_STEPS`, index for index - short enough for a dock button. */
-export const CAPTION_SCALE_LABELS: readonly string[] = ['S', 'M', 'L']
-
-/** The default caption size: the middle step. */
-export const DEFAULT_CAPTION_SCALE = CAPTION_SCALE_STEPS[1]
-
-/** Smallest/largest caption scale the store will accept - the ends of `CAPTION_SCALE_STEPS`, exported so the store can clamp without reasoning about the whole steps array. */
-export const MIN_CAPTION_SCALE = CAPTION_SCALE_STEPS[0]
-export const MAX_CAPTION_SCALE = CAPTION_SCALE_STEPS[CAPTION_SCALE_STEPS.length - 1]
+/** Where the caption starts, before the user touches anything. */
+export const DEFAULT_CAPTION_SCALE = 0.16
 
 /**
- * Which step a scale value corresponds to - the NEAREST one, not an exact
- * match. The store holds a plain clamped number rather than an index (one
- * writer, one value, no "index into an array the store cannot see"), so this
- * has to cope with a value that is not exactly a step: a clamp landing between
- * two of them, or a step list that changed under a value from an earlier build.
- * Nearest keeps the label and the next cycle step sane in all of those cases
- * instead of falling back to step 0 and silently resetting the user's choice.
+ * One press of `-`/`+`: a 12 % change of the CURRENT size, not a fixed
+ * increment - see the doc comment for why the ladder is multiplicative.
  */
-export function captionScaleIndex(scale: number): number {
-  if (!Number.isFinite(scale)) return CAPTION_SCALE_STEPS.indexOf(DEFAULT_CAPTION_SCALE)
-  let best = 0
-  for (let i = 1; i < CAPTION_SCALE_STEPS.length; i++) {
-    if (Math.abs(CAPTION_SCALE_STEPS[i] - scale) < Math.abs(CAPTION_SCALE_STEPS[best] - scale)) best = i
-  }
-  return best
+export const CAPTION_SCALE_STEP = 0.12
+
+/**
+ * The caption scale one press away from `scale`.
+ *
+ * @param direction `+1` for larger, `-1` for smaller. Any other value is
+ *   treated as its sign, so a caller cannot accidentally take a double step.
+ *
+ * Clamped to `[MIN_CAPTION_SCALE, MAX_CAPTION_SCALE]`, and a non-finite input
+ * lands on the default rather than propagating: a `NaN` reaching the HUD's own
+ * pixel arithmetic makes the caption silently vanish (uikit lays out a `NaN`
+ * font size as nothing at all), which is the worst possible failure for a
+ * subtitle - no error, no console warning, just gone.
+ *
+ * Stepping DOWN from a value already at the floor returns the floor, so the
+ * button is idempotent rather than oscillating; the dock disables it there
+ * anyway, but the guarantee belongs here where it is testable.
+ */
+export function stepCaptionScale(scale: number, direction: number): number {
+  if (!Number.isFinite(scale)) return DEFAULT_CAPTION_SCALE
+  const factor = direction >= 0 ? 1 + CAPTION_SCALE_STEP : 1 / (1 + CAPTION_SCALE_STEP)
+  return clampCaptionScale(scale * factor)
+}
+
+/** `scale`, forced into the accepted range; a non-finite value becomes the default. */
+export function clampCaptionScale(scale: number): number {
+  if (!Number.isFinite(scale)) return DEFAULT_CAPTION_SCALE
+  return Math.min(MAX_CAPTION_SCALE, Math.max(MIN_CAPTION_SCALE, scale))
 }
 
 /**
- * The next size step, wrapping round from the largest back to the smallest -
- * so the dock needs ONE button for caption size rather than a -/+ pair, which
- * matters on a row that already carries play/pause, the timeline, the time
- * readout, mute and volume. Three steps make the wrap cheap: the worst case
- * for reaching any size is two clicks.
+ * What the dock shows between the `-` and `+` buttons: the caption's size as a
+ * percentage OF THE DEFAULT, e.g. „100%" at the default and „112%" one press up.
+ *
+ * A percentage rather than the raw factor (0.16 means nothing to anyone) and
+ * relative to the default rather than to the maximum, because „am I above or
+ * below normal, and by how much" is the only question this readout has to
+ * answer - and it is the question someone re-finding a size they liked asks.
+ * Plain ASCII digits and a `%`; see `docs/UIKIT-NOTES.md` entry 3.
  */
-export function cycleCaptionScale(scale: number): number {
-  return CAPTION_SCALE_STEPS[(captionScaleIndex(scale) + 1) % CAPTION_SCALE_STEPS.length]
-}
-
-/** The one-character label for the step `scale` is on ("S"/"M"/"L") - what the dock's size button displays. */
 export function captionScaleLabel(scale: number): string {
-  return CAPTION_SCALE_LABELS[captionScaleIndex(scale)]
+  const safe = Number.isFinite(scale) ? scale : DEFAULT_CAPTION_SCALE
+  return `${Math.round((safe / DEFAULT_CAPTION_SCALE) * 100)}%`
+}
+
+/** How far up or down one press of the caption's position buttons moves it, in degrees. */
+export const CAPTION_OFFSET_STEP_DEG = 3
+/** The furthest the caption can be nudged from its default resting pitch. See the doc comment. */
+export const MAX_CAPTION_OFFSET_DEG = 12
+export const MIN_CAPTION_OFFSET_DEG = -MAX_CAPTION_OFFSET_DEG
+/** Where the caption sits before the user touches anything: exactly `<HeadLocked>`'s own default. */
+export const DEFAULT_CAPTION_OFFSET_DEG = 0
+
+/**
+ * The caption's vertical offset one press away from `offsetDeg`.
+ *
+ * @param direction `+1` for up, `-1` for down.
+ *
+ * Same guarantees as `stepCaptionScale`: clamped, idempotent at either end, and
+ * a non-finite input lands on the default (a `NaN` pitch would send the HUD to
+ * an undefined place on the sphere, or make `placeHeadLocked` produce a `NaN`
+ * position, which again means "the caption is simply gone").
+ */
+export function stepCaptionOffset(offsetDeg: number, direction: number): number {
+  if (!Number.isFinite(offsetDeg)) return DEFAULT_CAPTION_OFFSET_DEG
+  const delta = direction >= 0 ? CAPTION_OFFSET_STEP_DEG : -CAPTION_OFFSET_STEP_DEG
+  return clampCaptionOffset(offsetDeg + delta)
+}
+
+/** `offsetDeg`, forced into the accepted range; a non-finite value becomes the default. */
+export function clampCaptionOffset(offsetDeg: number): number {
+  if (!Number.isFinite(offsetDeg)) return DEFAULT_CAPTION_OFFSET_DEG
+  return Math.min(MAX_CAPTION_OFFSET_DEG, Math.max(MIN_CAPTION_OFFSET_DEG, offsetDeg))
 }

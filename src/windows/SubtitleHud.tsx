@@ -1,7 +1,7 @@
 import { useMemo, type ReactNode } from 'react'
 import { useStore } from 'zustand'
 import { Container, Text } from '@react-three/uikit'
-import { HeadLocked } from 'sphere-shell'
+import { DEFAULT_HEADLOCKED, HeadLocked } from 'sphere-shell'
 import { DEFAULT_CAPTION_SCALE } from '../captionScale'
 import type { PlayerStoreApi } from '../player/store'
 import { activeCue, seekFeedback } from './subtitleHudState'
@@ -191,6 +191,7 @@ export function SubtitleHud({ store }: { store: PlayerStoreApi }) {
   const segments = useStore(store, (s) => s.episode?.segments)
   const durationMs = useStore(store, (s) => s.episode?.durationMs ?? 0)
   const subtitleScale = useStore(store, (s) => s.subtitleScale)
+  const subtitleOffsetDeg = useStore(store, (s) => s.subtitleOffsetDeg)
 
   const cue = useMemo(() => activeCue(cues, currentTimeS * 1000), [cues, currentTimeS])
   const feedback = useMemo(
@@ -203,7 +204,25 @@ export function SubtitleHud({ store }: { store: PlayerStoreApi }) {
   if (!mounted) return null
 
   return (
-    <HeadLocked>
+    // The user's „Rauf/Runter-Button, um die Schrift in der fixierten Position
+    // zu verschieben", expressed through the one knob sphere-shell offers for
+    // it: `<HeadLocked>`'s per-instance `config` override of where the HUD
+    // rests relative to gaze. Positive `subtitleOffsetDeg` = up (see
+    // ../captionScale.ts), and it is ADDED to the library's own default rather
+    // than replacing it, so the caption still starts „below the primary
+    // content" and the store only ever holds the user's own displacement from
+    // that.
+    //
+    // A fresh object every render is fine and deliberate: `<HeadLocked>` reads
+    // `config` during its own `useFrame`, so it picks up a change on the next
+    // frame with no effect or subscription of its own - and there is nothing
+    // downstream that keys off its identity.
+    //
+    // This moves the WHOLE HUD, seek readout included. That is the honest
+    // behaviour rather than a compromise: the two panels are one vertical
+    // stack, and moving only the caption would let them overlap at one end of
+    // the range.
+    <HeadLocked config={{ offsetPitchDeg: DEFAULT_HEADLOCKED.offsetPitchDeg + subtitleOffsetDeg }}>
       <Container flexDirection="column" alignItems="center" gap={10}>
         {/* Fixed size on purpose - see FEEDBACK_SCALE's doc comment. */}
         {feedback != null && (

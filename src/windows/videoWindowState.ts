@@ -17,7 +17,47 @@ export function videoWindowId(flavorType: string): string {
 
 /** All video windows are 16:9 frames; the video inside letterboxes itself (see VideoSurface). */
 export const VIDEO_ASPECT = 16 / 9
-/** Angular width of the first two streams' windows. */
+
+/**
+ * ## „Am Start nur die Videofenster einblenden und das moeglichst gross"
+ *
+ * The second round of Quest feedback, and it is two changes that only make
+ * sense together: the panel windows (Kapitel, Transkript, Reihe, Info) now
+ * start CLOSED - present as dock tiles, one click away - and the space they
+ * were occupying goes to the video.
+ *
+ * The angular budget those numbers come from:
+ *
+ * - **Usable azimuth is about +-55 degrees.** A Quest 3's horizontal field of
+ *   view is roughly 110 degrees, so a window that stays inside +-55 can be read
+ *   without turning the head. The shell's own bounds are far wider (+-110), so
+ *   they are not the constraint here - comfort is.
+ * - **The dock is at -30 degrees elevation** and about 7 degrees tall, so
+ *   anything below about -26 collides with it. A 16:9 window centred at
+ *   elevation 0 reaches half its height down, which is what caps the widths
+ *   below.
+ *
+ * With ONE stream (the overwhelmingly common case in a real Opencast corpus -
+ * every recording on develop.opencast.org has a single video flavor) there is
+ * no second window to leave room for, so it gets 64 degrees: half-width 32,
+ * comfortably inside the budget, and half-height 18, clear of the dock.
+ *
+ * With TWO it is 52 degrees each at +-27, i.e. the pair spans -53..53 with a
+ * 2-degree gap between them - as wide as two streams can be while both stay
+ * inside the comfortable arc. That is a 30 % linear (69 % area) increase on the
+ * 40 degrees they had before.
+ *
+ * THREE or more keeps the previous layout unchanged (40-degree mains, 24-degree
+ * flanks): with a flank pair already out at +-55 there is no width left to give
+ * away, and no real recording gets there anyway - only this app's dev-only
+ * „Zweiter Stream (Test)" toggle produces even a second stream.
+ */
+export const SOLO_WIDTH_DEG = 64
+/** Angular width of each of the two main windows when the recording has exactly two streams. */
+export const PAIR_WIDTH_DEG = 52
+/** ...placed symmetrically about straight-ahead at this azimuth (half-width plus half the gap). */
+export const PAIR_AZIMUTH_DEG = 27
+/** Angular width of the first two streams' windows once a THIRD stream exists. */
 export const MAIN_WIDTH_DEG = 40
 /** ...placed symmetrically about straight-ahead at this azimuth. */
 export const MAIN_AZIMUTH_DEG = 24
@@ -36,22 +76,41 @@ export interface VideoWindowPlacement {
 /**
  * Start layout for the video window of the stream at `index` in
  * `PlayerStore.streams` (which is `selectStreams`' order: presenter,
- * presentation, then alphabetical).
+ * presentation, then alphabetical), for a recording with `streamCount` streams
+ * in total.
  *
- * Even indices go left, odd indices right, so the two main streams sit
- * symmetrically at +-24 deg and the flanks pair up the same way. A fifth
- * stream and beyond stacks DOWNWARD on the flanks (one row per pair) rather
- * than widening the arc: the shell's default bounds stop at +-110 deg azimuth
- * and -40 deg elevation, so rows past the third would be clamped by the shell -
- * acceptable, since no real Opencast recording has eight video flavors, and a
- * clamped-but-visible window beats an off-shell one.
+ * The count is a parameter and not an ambient constant because the SIZE depends
+ * on it - see the sizing constants above for the angular budget. `index` alone
+ * cannot answer "how wide should the first window be", which is exactly the bug
+ * the previous signature had: a lone stream got the same 40 degrees as one of a
+ * pair, and the other 25 degrees of comfortable arc went unused.
+ *
+ * Even indices go left, odd indices right, so a pair sits symmetrically and the
+ * flanks pair up the same way. A fifth stream and beyond stacks DOWNWARD on the
+ * flanks (one row per pair) rather than widening the arc: the shell's default
+ * bounds stop at +-110 deg azimuth and -40 deg elevation, so rows past the third
+ * would be clamped by the shell - acceptable, since no real Opencast recording
+ * has eight video flavors, and a clamped-but-visible window beats an off-shell
+ * one.
  */
-export function videoWindowPlacement(index: number): VideoWindowPlacement {
+export function videoWindowPlacement(index: number, streamCount: number): VideoWindowPlacement {
   const side = index % 2 === 0 ? -1 : 1
-  if (index < 2) {
+  // A count that does not contain `index` (a caller mid-swap, a defensive 0)
+  // must not produce a smaller window than the index itself implies.
+  const count = Math.max(streamCount, index + 1)
+
+  if (count === 1) {
     return {
-      size: { width: MAIN_WIDTH_DEG, height: MAIN_WIDTH_DEG / VIDEO_ASPECT },
-      position: { azimuth: side * MAIN_AZIMUTH_DEG, elevation: 0 },
+      size: { width: SOLO_WIDTH_DEG, height: SOLO_WIDTH_DEG / VIDEO_ASPECT },
+      position: { azimuth: 0, elevation: 0 },
+    }
+  }
+  if (index < 2) {
+    const width = count === 2 ? PAIR_WIDTH_DEG : MAIN_WIDTH_DEG
+    const azimuth = count === 2 ? PAIR_AZIMUTH_DEG : MAIN_AZIMUTH_DEG
+    return {
+      size: { width, height: width / VIDEO_ASPECT },
+      position: { azimuth: side * azimuth, elevation: 0 },
     }
   }
   const height = SIDE_WIDTH_DEG / VIDEO_ASPECT

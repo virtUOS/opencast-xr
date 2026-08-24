@@ -3,6 +3,8 @@ import { useStore } from 'zustand'
 import { Window } from 'sphere-shell'
 import type { PlayerStoreApi } from '../player/store'
 import { MediaList } from './MediaList'
+import { PANEL_WINDOW_IDS } from './panelWindows'
+import { useStartClosed } from './useStartClosed'
 import { activeSegmentIndex, segmentTiles } from './chaptersState'
 
 // Placed at the same azimuth Task 12's video windows reserve for a
@@ -39,6 +41,10 @@ const EMPTY_TEXT = 'Keine Kapitel.' // unreachable in practice - App.tsx only mo
  * `videoWindowState.ts`/`VideoWindows.tsx` already use.
  */
 export function ChaptersWindow({ store }: { store: PlayerStoreApi }) {
+  // Starts as a dock tile rather than on the shell - see `panelWindows.ts`.
+  // Takes effect only once the recording actually HAS segments, since until
+  // then this window registers nothing at all.
+  useStartClosed(PANEL_WINDOW_IDS.chapters)
   const segments = useStore(store, (s) => s.episode?.segments)
   const durationMs = useStore(store, (s) => s.episode?.durationMs ?? 0)
   const currentTimeS = useStore(store, (s) => s.currentTimeS)

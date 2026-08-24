@@ -5,6 +5,8 @@ import { Window } from 'sphere-shell'
 import type { PlayerStoreApi } from '../player/store'
 import { MediaList } from './MediaList'
 import { toEpisodeTile } from './libraryState'
+import { PANEL_WINDOW_IDS } from './panelWindows'
+import { useStartClosed } from './useStartClosed'
 import type { SeriesStateApi } from './seriesState'
 
 const RETRY_LABEL = 'Erneut versuchen'
@@ -70,6 +72,10 @@ export function SeriesWindow({
   /** The one instance `App.tsx` owns, shared with `DockTransport` - see this component's doc comment. */
   seriesStore: SeriesStateApi
 }) {
+  // Starts as a dock tile rather than on the shell - see `panelWindows.ts`.
+  // The dock breadcrumb's current-recording crumb is the other way back to it,
+  // which is why that crumb now carries a list icon.
+  useStartClosed(PANEL_WINDOW_IDS.series)
   const seriesId = useStore(store, (s) => s.episode?.seriesId)
   const currentEpisodeId = useStore(store, (s) => s.episode?.id)
 

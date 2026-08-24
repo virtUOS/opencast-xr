@@ -2,6 +2,8 @@ import { useStore } from 'zustand'
 import { Container, Text } from '@react-three/uikit'
 import { Window } from 'sphere-shell'
 import type { PlayerStoreApi } from '../player/store'
+import { PANEL_WINDOW_IDS } from './panelWindows'
+import { useStartClosed } from './useStartClosed'
 
 // Umlauts are fine here - Task 11's live verification against the real
 // server confirmed uikit's default font renders accented Latin letters
@@ -41,6 +43,9 @@ const LABEL_COLOR = '#9a9aa5'
 export function ControlsWindow({ store }: { store: PlayerStoreApi }) {
   const episode = useStore(store, (s) => s.episode)
   const cuesCount = useStore(store, (s) => s.cues.length)
+  // Starts as a dock tile rather than on the shell - see `panelWindows.ts`. The
+  // dock's „i" button is the other way back to it.
+  useStartClosed(PANEL_WINDOW_IDS.info)
 
   // Defensive only: App.tsx mounts this exclusively in player mode, which
   // always has an episode by the time `mode` flips (store.ts's `openEpisode`

@@ -6,8 +6,12 @@ import {
   ALargeSmall,
   Captions,
   CaptionsOff,
+  ChevronDown,
   ChevronRight,
+  ChevronUp,
   House,
+  Info,
+  List,
   LoaderCircle,
   Minus,
   Pause,
@@ -18,8 +22,10 @@ import {
   Volume2,
   VolumeX,
 } from '@react-three/uikit-lucide'
+import { useShellStore, useWindowState } from 'sphere-shell'
 import type { PlayerStoreApi } from '../player/store'
 import type { SeriesStateApi } from './seriesState'
+import { PANEL_WINDOW_IDS, panelToggleAction, type PanelWindowId } from './panelWindows'
 import {
   derivePlaybackVisualState,
   fractionToSeconds,
@@ -28,7 +34,15 @@ import {
   transportTimeParts,
   volumeToPercent,
 } from './transportState'
-import { cycleCaptionScale, captionScaleLabel } from '../captionScale'
+import {
+  MAX_CAPTION_OFFSET_DEG,
+  MAX_CAPTION_SCALE,
+  MIN_CAPTION_OFFSET_DEG,
+  MIN_CAPTION_SCALE,
+  captionScaleLabel,
+  stepCaptionOffset,
+  stepCaptionScale,
+} from '../captionScale'
 import {
   adjacentEpisodes,
   breadcrumbTrail,
@@ -46,11 +60,27 @@ import {
 
 const BUTTON_ICON_PX = 15
 const SMALL_ICON_PX = 13
-const TRACK_WIDTH_PX = 180
 const TRACK_HEIGHT_PX = 6
+/**
+ * Least width the timeline is ever laid out at. It normally takes whatever row
+ * 1 has left over (`flexGrow`), which is "the whole width of the dock" minus
+ * the two time readouts - see this file's doc comment. The floor only matters
+ * for a degenerate row (a recording whose breadcrumb is unusually short), where
+ * without it the track could collapse to a few pixels and become unaimable.
+ */
+const TRACK_MIN_WIDTH_PX = 180
 const ROW_HEIGHT_PX = 30
-/** The second row is text-and-small-buttons only, so it needs less height than row 1's play button and timeline. */
+/** The second row is text-and-small-buttons only, so it needs less height than row 1's timeline. */
 const CRUMB_ROW_HEIGHT_PX = 24
+const ROW_GAP_PX = 6
+/**
+ * The Play/Pause button spans BOTH rows, at the user's request („Nur der
+ * Play/Pause Button sollte beide Zeilen ueberspannen") - so it is exactly as
+ * tall as the two rows plus the gap between them, and square.
+ */
+const PLAY_BUTTON_PX = ROW_HEIGHT_PX + ROW_GAP_PX + CRUMB_ROW_HEIGHT_PX
+/** Fixed width for each time readout, so the timeline's own width does not twitch as the digits change. */
+const TIME_LABEL_WIDTH_PX = 46
 
 const BUTTON_BG = '#2c2c3a'
 const BUTTON_BG_HOVER = '#3a3a4a'
@@ -107,12 +137,38 @@ function IconButton({
 }
 
 /**
- * The dock's player-mode transport, in TWO ROWS:
+ * The dock's player-mode transport: one big Play/Pause button spanning two
+ * rows, and beside it
  *
- * - **row 1** - Play/Pause, the click-and-drag timeline with its time readout,
- *   then audio (mute + volume) and captions (on/off + size);
- * - **row 2** - the `Home > Reihe > aktuelle Aufzeichnung` breadcrumb, and
- *   previous/next episode.
+ * - **row 1** - nothing but the timeline, flanked by the position and duration
+ *   readouts;
+ * - **row 2** - everything else: the `Home > Reihe > aktuelle Aufzeichnung`
+ *   breadcrumb, previous/next episode, the captions controls (on/off, and -
+ *   only while captions are ON - size and vertical position), mute and volume,
+ *   and the „i" button for the Info window.
+ *
+ * That shape is the user's, after wearing the headset („Die Zeitleiste sollte
+ * ueber die gesamte Breite des Docks gehen. Andere Buttons sind wie die
+ * Breadcrumbs unter der Zeitleiste. Nur der Play/Pause Button sollte beide
+ * Zeilen ueberspannen"), and it is a good one for a controller ray: the two
+ * controls used most are also the two largest and the two easiest to hit
+ * without aiming precisely - a 60 px square and a track as wide as the dock.
+ *
+ * ## How the timeline gets „die gesamte Breite" without a magic number
+ *
+ * No fixed width anywhere. The column of two rows sizes itself to its WIDEST
+ * child, which is always row 2 (a breadcrumb plus a dozen buttons); row 1
+ * stretches to that width because a flex column's default `alignItems` is
+ * `stretch`; and the track alone carries `flexGrow={1}`, so it absorbs
+ * everything row 1 does not spend on the two fixed-width time readouts.
+ *
+ * The alternative - a constant `SLOT_WIDTH_PX` - was rejected: row 2's real
+ * width depends on the breadcrumb's truncated labels, whether the recording has
+ * a series at all, and whether captions are on, so any constant is either too
+ * small (row 2 overflows the strip, since uikit's flex children do not shrink
+ * by default) or too large (a dock with dead space in it). Sizing to content in
+ * one axis and growing into it in the other is exactly what flexbox is for, and
+ * it re-solves itself when the caption buttons appear or disappear.
  *
  * ## Two rows inside a one-row dock
  *
@@ -120,9 +176,24 @@ function IconButton({
  * `alignItems="center"` and no fixed height, and the app's slot is one child of
  * that row. So a slot child that is itself a `flexDirection="column"` simply
  * becomes a taller row item and the dock grows to fit it - no sphere-shell
- * change needed, and the shell's own Arrange/Recenter/Curved buttons stay
- * vertically centred beside it. Verified live (screenshot + measured dock
- * height) rather than assumed.
+ * change needed, and the shell's own controls stay vertically centred beside
+ * it. Verified live (screenshot + measured dock height) rather than assumed.
+ *
+ * The shell's own three-dot menu and red exit X are NOT in row 2, even though
+ * the user's sketch put them there: they belong to sphere-shell, which renders
+ * them outside the app's slot (and must, since an app cannot know whether a
+ * session is running). They sit centred beside the two rows instead, which is
+ * the same visual band and the closest an app-side layout can get without the
+ * library rendering app content.
+ *
+ * ## Opening a window from the dock
+ *
+ * Two controls here open a WINDOW rather than change playback: the
+ * current-recording crumb (the Reihe window - the user asked for it, with an
+ * icon to say the crumb is now live) and the „i" button (the Info window). Both
+ * go through the SHELL store's `restore`/`close`, never through a player-store
+ * flag - the shell owns open/closed (see `panelWindows.ts`), and those windows
+ * now START closed, so this is the way back to them alongside their dock tiles.
  *
  * ## What moved here, and what left
  *
@@ -286,6 +357,7 @@ export function DockTransport({
   const cuesCount = useStore(store, (s) => s.cues.length)
   const subtitlesOn = useStore(store, (s) => s.subtitlesOn)
   const subtitleScale = useStore(store, (s) => s.subtitleScale)
+  const subtitleOffsetDeg = useStore(store, (s) => s.subtitleOffsetDeg)
   const volume = useStore(store, (s) => s.volume)
   const muted = useStore(store, (s) => s.muted)
   const seriesEpisodes = useStore(seriesStore, (s) => s.episodes)
@@ -442,10 +514,42 @@ export function DockTransport({
     state.setSubtitles(!state.subtitlesOn)
   }, [store])
 
-  const cycleSize = useCallback(() => {
-    const state = store.getState()
-    state.setSubtitleScale(cycleCaptionScale(state.subtitleScale))
-  }, [store])
+  // „Vielleicht mit + und - Buttons einfach einstellbar", replacing the old
+  // S/M/L cycle: one press is a constant RATIO of the current size, so it feels
+  // the same at either end of the range (see ../captionScale.ts).
+  const stepSize = useCallback(
+    (direction: number) => {
+      const state = store.getState()
+      state.setSubtitleScale(stepCaptionScale(state.subtitleScale, direction))
+    },
+    [store],
+  )
+
+  // „Zusaetzlich ein Rauf/Runter-Button, um die Schrift in der fixierten
+  // Position zu verschieben." Positive = up; `SubtitleHud` adds it to
+  // <HeadLocked>'s own resting pitch.
+  const stepOffset = useCallback(
+    (direction: number) => {
+      const state = store.getState()
+      state.setSubtitleOffset(stepCaptionOffset(state.subtitleOffsetDeg, direction))
+    },
+    [store],
+  )
+
+  // Both window toggles below write through the SHELL store - the shell owns
+  // open/closed. See `panelWindows.ts` and this file's doc comment.
+  const shellStore = useShellStore()
+  const seriesWindow = useWindowState(PANEL_WINDOW_IDS.series)
+  const infoWindow = useWindowState(PANEL_WINDOW_IDS.info)
+
+  const togglePanel = useCallback(
+    (id: PanelWindowId, entry: { closed: boolean; minimized: boolean } | undefined) => {
+      const shell = shellStore.getState()
+      if (panelToggleAction(entry) === 'restore') shell.restore(id)
+      else shell.close(id)
+    },
+    [shellStore],
+  )
 
   const trail = useMemo(
     () => (episode ? breadcrumbTrail(episode) : []),
@@ -506,9 +610,17 @@ export function DockTransport({
 
   const onCrumb = useCallback(
     (crumb: Crumb) => {
-      // 'current' is where the user already is - a no-op by design, see this
-      // file's doc comment.
-      if (crumb.kind === 'current') return
+      if (crumb.kind === 'current') {
+        // No longer inert. „Das Fenster fuer die anderen Episoden kann ich
+        // einblenden, wenn ich auf den aktuellen Episodennamen klicke" - the
+        // crumb the user is already standing on is the natural place to ask
+        // „what else is in this series?", and the list icon beside the label
+        // says so. Nothing to toggle for a recording with no series, and the
+        // crumb renders without the icon in that case.
+        if (episode?.seriesId == null) return
+        togglePanel(PANEL_WINDOW_IDS.series, seriesWindow)
+        return
+      }
       if (crumb.kind === 'home') {
         store.getState().toBrowse()
         return
@@ -522,7 +634,7 @@ export function DockTransport({
       const title = episode?.seriesTitle ?? crumb.sid
       store.getState().toBrowse({ kind: 'series', sid: crumb.sid, title })
     },
-    [store, episode?.seriesTitle],
+    [store, episode?.seriesTitle, episode?.seriesId, togglePanel, seriesWindow],
   )
 
   // Defensive only: App.tsx mounts this exclusively in player mode, which
@@ -541,32 +653,53 @@ export function DockTransport({
   // list to step through, so the controls are absent rather than permanently
   // disabled (nothing the user could do would ever enable them).
   const showNeighbours = episode.seriesId != null
+  // „On screen" for a panel window is neither flag set - a minimized window is
+  // as absent as a closed one from where the viewer is standing, and pressing
+  // the button must bring it back rather than close it again (panelToggleAction
+  // decides that; this only decides how the button LOOKS).
+  const infoOpen = infoWindow != null && !infoWindow.closed && !infoWindow.minimized
+
+  const captionsActive = subtitlesOn && !subtitlesDisabled
 
   return (
-    <Container flexDirection="column" gap={6} alignItems="flex-start">
-      {/* ROW 1: transport, audio, captions */}
-      <Container flexDirection="row" alignItems="center" gap={8}>
-        <Container
-          height={ROW_HEIGHT_PX}
-          width={ROW_HEIGHT_PX}
-          alignItems="center"
-          justifyContent="center"
-          backgroundColor="#2f6f4f"
-          borderRadius={6}
-          hover={{ backgroundColor: '#3f9f6f' }}
-          onClick={(e) => {
-            e.stopPropagation()
-            togglePlay()
-          }}
-        >
-          <PlayPauseIcon width={BUTTON_ICON_PX} height={BUTTON_ICON_PX} color="#ffffff" />
-        </Container>
+    <Container flexDirection="row" alignItems="center" gap={8}>
+      {/* Play/Pause, spanning both rows. Square and 60 px on a side - by far
+          the largest target in the strip, because it is the one control a
+          viewer reaches for without looking at the dock. */}
+      <Container
+        height={PLAY_BUTTON_PX}
+        width={PLAY_BUTTON_PX}
+        alignItems="center"
+        justifyContent="center"
+        backgroundColor="#2f6f4f"
+        borderRadius={8}
+        hover={{ backgroundColor: '#3f9f6f' }}
+        onClick={(e) => {
+          e.stopPropagation()
+          togglePlay()
+        }}
+      >
+        <PlayPauseIcon width={26} height={26} color="#ffffff" />
+      </Container>
 
+      {/* No `alignItems` override on this column: a flex column stretches its
+          children by default, which is exactly what makes row 1 as wide as row
+          2 and therefore lets the timeline fill the dock. See the doc comment. */}
+      <Container flexDirection="column" gap={ROW_GAP_PX}>
+        {/* ROW 1: the timeline, and nothing else. The time readouts stay where
+            they have always been - flanking the track - at the user's explicit
+            request („Die Abspielposition und Dauer koennen da bleiben wo sie
+            gerade sind"). */}
         <Container height={ROW_HEIGHT_PX} flexDirection="row" alignItems="center" gap={8}>
-          <Text fontSize={11} color="#cfd8ff">{currentLabel}</Text>
+          <Text fontSize={11} color="#cfd8ff" width={TIME_LABEL_WIDTH_PX} textAlign="right">
+            {currentLabel}
+          </Text>
           <Container
             ref={trackRef}
-            width={TRACK_WIDTH_PX}
+            // The one element in the row that grows: everything else here has a
+            // fixed width, so the track absorbs the whole rest of the dock.
+            flexGrow={1}
+            minWidth={TRACK_MIN_WIDTH_PX}
             height={TRACK_HEIGHT_PX}
             borderRadius={TRACK_HEIGHT_PX / 2}
             backgroundColor="#33333d"
@@ -579,141 +712,210 @@ export function DockTransport({
               positionType="absolute"
               positionLeft={0}
               positionTop={0}
-              width={Math.round(TRACK_WIDTH_PX * fillFraction)}
+              // A PERCENTAGE, not `TRACK_WIDTH * fraction` px: the track no
+              // longer has a width this component knows - it is whatever row 1
+              // had left over. uikit accepts a `${n}%` string and resolves it
+              // against the parent's laid-out box, so the fill stays correct at
+              // any dock width, including on the first frame before the strip
+              // has settled.
+              width={`${Math.round(fillFraction * 1000) / 10}%`}
               height={TRACK_HEIGHT_PX}
               borderRadius={TRACK_HEIGHT_PX / 2}
               backgroundColor="#6f9fff"
               pointerEvents="none"
             />
           </Container>
-          <Text fontSize={11} color="#cfd8ff">{totalLabel}</Text>
+          <Text fontSize={11} color="#cfd8ff" width={TIME_LABEL_WIDTH_PX}>
+            {totalLabel}
+          </Text>
         </Container>
 
-        {/* Audio: mute, then volume in 10% steps. The percentage stays visible
-            while muted (greyed) rather than being replaced by "-" - it is the
-            level unmuting will come back to, which is exactly what someone
-            reaching for the volume while muted wants to know. */}
-        <IconButton
-          background={muted ? ACTIVE_BG : BUTTON_BG}
-          hoverBackground={muted ? ACTIVE_BG_HOVER : BUTTON_BG_HOVER}
-          onPress={toggleMuted}
-        >
-          <VolumeIcon width={BUTTON_ICON_PX} height={BUTTON_ICON_PX} color="#ffffff" />
-        </IconButton>
-        <IconButton size={24} disabled={volume <= 0} onPress={() => applyVolumeStep(-1)}>
-          <Minus width={SMALL_ICON_PX} height={SMALL_ICON_PX} color={volume <= 0 ? DISABLED_COLOR : '#ffffff'} />
-        </IconButton>
-        <Text
-          fontSize={11}
-          color={muted ? DISABLED_COLOR : '#cfd8ff'}
-          // Fixed width so stepping 90% -> 100% does not shove every control
-          // to its right sideways (and, in the dock's row, resize the whole
-          // strip) on each click.
-          width={30}
-          textAlign="center"
-        >
-          {`${volumeToPercent(volume)}%`}
-        </Text>
-        <IconButton size={24} disabled={volume >= 1} onPress={() => applyVolumeStep(1)}>
-          <Plus width={SMALL_ICON_PX} height={SMALL_ICON_PX} color={volume >= 1 ? DISABLED_COLOR : '#ffffff'} />
-        </IconButton>
+        {/* ROW 2: where you are, the neighbouring recordings, and every
+            remaining control. */}
+        <Container flexDirection="row" alignItems="center" gap={4}>
+          {trail.map((crumb, index) => {
+            // The last crumb is no longer inert: it opens (and closes) the
+            // Reihe window, and says so with a list icon. Only when there IS a
+            // series - for a single recording it stays a plain label.
+            const opensSeries = crumb.kind === 'current' && showNeighbours
+            const interactive = crumb.kind !== 'current' || opensSeries
+            return (
+              // `kind` is unique within a trail (one home, at most one series,
+              // one current - see breadcrumbTrail), so it is a stable key.
+              <Container key={crumb.kind} flexDirection="row" alignItems="center" gap={4}>
+                {index > 0 && <ChevronRight width={11} height={11} color="#5a5a65" />}
+                <Container
+                  height={CRUMB_ROW_HEIGHT_PX}
+                  paddingX={6}
+                  gap={4}
+                  flexDirection="row"
+                  alignItems="center"
+                  borderRadius={4}
+                  backgroundColor="#22222c"
+                  // A non-interactive crumb keeps its resting colour on hover.
+                  // Always a present object - never `undefined` - per
+                  // docs/UIKIT-NOTES.md entry 1.
+                  hover={{ backgroundColor: interactive ? '#2f3a4f' : '#22222c' }}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onCrumb(crumb)
+                  }}
+                >
+                  {crumb.kind === 'home' && <House width={11} height={11} color={CRUMB_COLOR} />}
+                  <Text
+                    fontSize={11}
+                    color={crumb.kind === 'current' ? CRUMB_CURRENT_COLOR : CRUMB_COLOR}
+                  >
+                    {crumb.label}
+                  </Text>
+                  {/* „Bitte ein passendes Symbol da noch einblenden, dass man
+                      merkt, dass eine Aktion da verbunden ist." A list icon,
+                      because what it opens IS the list of the other episodes -
+                      and it is drawn in the brighter crumb colour, so the
+                      affordance reads even where the greyed label does not. */}
+                  {opensSeries && <List width={11} height={11} color={CRUMB_COLOR} />}
+                </Container>
+              </Container>
+            )
+          })}
 
-        {/* Captions: on/off, then size. Both were in `ControlsWindow`'s
-            territory before this round (size did not exist at all). */}
-        <IconButton
-          background={subtitlesOn && !subtitlesDisabled ? ACTIVE_BG : BUTTON_BG}
-          hoverBackground={subtitlesOn && !subtitlesDisabled ? ACTIVE_BG_HOVER : BUTTON_BG_HOVER}
-          disabled={subtitlesDisabled}
-          onPress={toggleSubtitles}
-        >
-          <CaptionIcon width={BUTTON_ICON_PX} height={BUTTON_ICON_PX} color={captionColor} />
-        </IconButton>
-        {/* One cycling button (S -> M -> L -> S) rather than a -/+ pair: this
-            row is already dense, and with three steps any size is at most two
-            clicks away. The label is the current step, not the next one. */}
-        <Container
-          height={ROW_HEIGHT_PX}
-          paddingX={8}
-          gap={4}
-          flexDirection="row"
-          alignItems="center"
-          justifyContent="center"
-          backgroundColor={BUTTON_BG}
-          borderRadius={6}
-          hover={{ backgroundColor: subtitlesDisabled ? BUTTON_BG : BUTTON_BG_HOVER }}
-          onClick={(e) => {
-            e.stopPropagation()
-            if (subtitlesDisabled) return
-            cycleSize()
-          }}
-        >
-          <ALargeSmall width={BUTTON_ICON_PX} height={BUTTON_ICON_PX} color={captionColor} />
-          <Text fontSize={11} color={captionColor}>{captionScaleLabel(subtitleScale)}</Text>
-        </Container>
-      </Container>
-
-      {/* ROW 2: where you are, and the neighbouring recordings */}
-      <Container flexDirection="row" alignItems="center" gap={4}>
-        {trail.map((crumb, index) => (
-          // `kind` is unique within a trail (one home, at most one series, one
-          // current - see breadcrumbTrail), so it is a stable key.
-          <Container key={crumb.kind} flexDirection="row" alignItems="center" gap={4}>
-            {index > 0 && <ChevronRight width={11} height={11} color="#5a5a65" />}
-            <Container
-              height={CRUMB_ROW_HEIGHT_PX}
-              paddingX={6}
-              gap={4}
-              flexDirection="row"
-              alignItems="center"
-              borderRadius={4}
-              backgroundColor="#22222c"
-              // The current crumb is not a link: same resting colour on hover,
-              // and the click handler returns early (see `onCrumb`). Kept as an
-              // always-present object - never `undefined` - per
-              // docs/UIKIT-NOTES.md entry 1.
-              hover={{ backgroundColor: crumb.kind === 'current' ? '#22222c' : '#2f3a4f' }}
-              onClick={(e) => {
-                e.stopPropagation()
-                onCrumb(crumb)
-              }}
-            >
-              {crumb.kind === 'home' && <House width={11} height={11} color={CRUMB_COLOR} />}
-              <Text
-                fontSize={11}
-                color={crumb.kind === 'current' ? CRUMB_CURRENT_COLOR : CRUMB_COLOR}
+          {showNeighbours && (
+            <Container flexDirection="row" alignItems="center" gap={4} marginLeft={4}>
+              <IconButton
+                size={CRUMB_ROW_HEIGHT_PX}
+                disabled={neighbours.previous == null}
+                onPress={() => openNeighbour(neighbours.previous?.id)}
               >
-                {crumb.label}
-              </Text>
+                <SkipBack
+                  width={SMALL_ICON_PX}
+                  height={SMALL_ICON_PX}
+                  color={neighbours.previous == null ? DISABLED_COLOR : '#ffffff'}
+                />
+              </IconButton>
+              <IconButton
+                size={CRUMB_ROW_HEIGHT_PX}
+                disabled={neighbours.next == null}
+                onPress={() => openNeighbour(neighbours.next?.id)}
+              >
+                <SkipForward
+                  width={SMALL_ICON_PX}
+                  height={SMALL_ICON_PX}
+                  color={neighbours.next == null ? DISABLED_COLOR : '#ffffff'}
+                />
+              </IconButton>
             </Container>
-          </Container>
-        ))}
+          )}
 
-        {showNeighbours && (
-          <Container flexDirection="row" alignItems="center" gap={4} marginLeft={8}>
-            <IconButton
-              size={CRUMB_ROW_HEIGHT_PX}
-              disabled={neighbours.previous == null}
-              onPress={() => openNeighbour(neighbours.previous?.id)}
-            >
-              <SkipBack
-                width={SMALL_ICON_PX}
-                height={SMALL_ICON_PX}
-                color={neighbours.previous == null ? DISABLED_COLOR : '#ffffff'}
-              />
-            </IconButton>
-            <IconButton
-              size={CRUMB_ROW_HEIGHT_PX}
-              disabled={neighbours.next == null}
-              onPress={() => openNeighbour(neighbours.next?.id)}
-            >
-              <SkipForward
-                width={SMALL_ICON_PX}
-                height={SMALL_ICON_PX}
-                color={neighbours.next == null ? DISABLED_COLOR : '#ffffff'}
-              />
-            </IconButton>
-          </Container>
-        )}
+          <Container width={1} height={18} backgroundColor="#33333d" marginX={4} />
+
+          {/* Captions: on/off, and - only while they are actually showing -
+              size and vertical position. „Die Buttons nur eingeblendet, wenn
+              die Untertitel aktiviert sind": four controls that change nothing
+              visible with the captions off would be four ways to wonder whether
+              the dock is broken. */}
+          <IconButton
+            size={CRUMB_ROW_HEIGHT_PX}
+            background={captionsActive ? ACTIVE_BG : BUTTON_BG}
+            hoverBackground={captionsActive ? ACTIVE_BG_HOVER : BUTTON_BG_HOVER}
+            disabled={subtitlesDisabled}
+            onPress={toggleSubtitles}
+          >
+            <CaptionIcon width={SMALL_ICON_PX} height={SMALL_ICON_PX} color={captionColor} />
+          </IconButton>
+          {captionsActive && (
+            <Container flexDirection="row" alignItems="center" gap={4}>
+              <ALargeSmall width={SMALL_ICON_PX} height={SMALL_ICON_PX} color="#cfd8ff" />
+              <IconButton
+                size={CRUMB_ROW_HEIGHT_PX}
+                disabled={subtitleScale <= MIN_CAPTION_SCALE}
+                onPress={() => stepSize(-1)}
+              >
+                <Minus
+                  width={SMALL_ICON_PX}
+                  height={SMALL_ICON_PX}
+                  color={subtitleScale <= MIN_CAPTION_SCALE ? DISABLED_COLOR : '#ffffff'}
+                />
+              </IconButton>
+              {/* Fixed width, same reason as the volume readout: „100%" ->
+                  „112%" must not shove the rest of the row sideways - and in
+                  the dock, resize the whole strip - on every press. */}
+              <Text fontSize={11} color="#cfd8ff" width={34} textAlign="center">
+                {captionScaleLabel(subtitleScale)}
+              </Text>
+              <IconButton
+                size={CRUMB_ROW_HEIGHT_PX}
+                disabled={subtitleScale >= MAX_CAPTION_SCALE}
+                onPress={() => stepSize(1)}
+              >
+                <Plus
+                  width={SMALL_ICON_PX}
+                  height={SMALL_ICON_PX}
+                  color={subtitleScale >= MAX_CAPTION_SCALE ? DISABLED_COLOR : '#ffffff'}
+                />
+              </IconButton>
+              <IconButton
+                size={CRUMB_ROW_HEIGHT_PX}
+                disabled={subtitleOffsetDeg >= MAX_CAPTION_OFFSET_DEG}
+                onPress={() => stepOffset(1)}
+              >
+                <ChevronUp
+                  width={SMALL_ICON_PX}
+                  height={SMALL_ICON_PX}
+                  color={subtitleOffsetDeg >= MAX_CAPTION_OFFSET_DEG ? DISABLED_COLOR : '#ffffff'}
+                />
+              </IconButton>
+              <IconButton
+                size={CRUMB_ROW_HEIGHT_PX}
+                disabled={subtitleOffsetDeg <= MIN_CAPTION_OFFSET_DEG}
+                onPress={() => stepOffset(-1)}
+              >
+                <ChevronDown
+                  width={SMALL_ICON_PX}
+                  height={SMALL_ICON_PX}
+                  color={subtitleOffsetDeg <= MIN_CAPTION_OFFSET_DEG ? DISABLED_COLOR : '#ffffff'}
+                />
+              </IconButton>
+            </Container>
+          )}
+
+          <Container width={1} height={18} backgroundColor="#33333d" marginX={4} />
+
+          {/* Audio: mute, then volume in 10% steps. The percentage stays visible
+              while muted (greyed) rather than being replaced by "-" - it is the
+              level unmuting will come back to, which is exactly what someone
+              reaching for the volume while muted wants to know. */}
+          <IconButton
+            size={CRUMB_ROW_HEIGHT_PX}
+            background={muted ? ACTIVE_BG : BUTTON_BG}
+            hoverBackground={muted ? ACTIVE_BG_HOVER : BUTTON_BG_HOVER}
+            onPress={toggleMuted}
+          >
+            <VolumeIcon width={SMALL_ICON_PX} height={SMALL_ICON_PX} color="#ffffff" />
+          </IconButton>
+          <IconButton size={CRUMB_ROW_HEIGHT_PX} disabled={volume <= 0} onPress={() => applyVolumeStep(-1)}>
+            <Minus width={SMALL_ICON_PX} height={SMALL_ICON_PX} color={volume <= 0 ? DISABLED_COLOR : '#ffffff'} />
+          </IconButton>
+          <Text fontSize={11} color={muted ? DISABLED_COLOR : '#cfd8ff'} width={30} textAlign="center">
+            {`${volumeToPercent(volume)}%`}
+          </Text>
+          <IconButton size={CRUMB_ROW_HEIGHT_PX} disabled={volume >= 1} onPress={() => applyVolumeStep(1)}>
+            <Plus width={SMALL_ICON_PX} height={SMALL_ICON_PX} color={volume >= 1 ? DISABLED_COLOR : '#ffffff'} />
+          </IconButton>
+
+          {/* „Einen i/Info-Button im Dock zum Anzeigen der Infos." The Info
+              window starts closed like the other panels, so this button and its
+              dock tile are the two ways to it; pressing it again puts it away.
+              Lit like an active toggle while the window is on screen, which is
+              what makes the second press predictable. */}
+          <IconButton
+            size={CRUMB_ROW_HEIGHT_PX}
+            background={infoOpen ? ACTIVE_BG : BUTTON_BG}
+            hoverBackground={infoOpen ? ACTIVE_BG_HOVER : BUTTON_BG_HOVER}
+            onPress={() => togglePanel(PANEL_WINDOW_IDS.info, infoWindow)}
+          >
+            <Info width={SMALL_ICON_PX} height={SMALL_ICON_PX} color="#ffffff" />
+          </IconButton>
+        </Container>
       </Container>
     </Container>
   )
