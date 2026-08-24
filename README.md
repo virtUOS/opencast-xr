@@ -21,7 +21,7 @@ on your PATH):
 ```bash
 pnpm install
 pnpm --filter opencast-player dev     # HTTPS on all interfaces, port 5190
-pnpm --filter opencast-player test    # 302 unit tests
+pnpm --filter opencast-player test    # 367 unit tests
 pnpm --filter opencast-player build
 ```
 
@@ -37,6 +37,37 @@ unavailable. For a headset, see
 [`docs/QUEST-VALIDATION-PLAYER.md`](../../docs/QUEST-VALIDATION-PLAYER.md),
 which covers the LAN and `adb reverse` routes and the whole acceptance
 checklist.
+
+## Controls
+
+Everything you operate while watching is in the **dock**, the strip below the
+windows — one place, always in reach, always aimable with a controller ray. It
+has two rows in player mode (browse mode shows no transport at all):
+
+| Row | Control | What it does |
+|---|---|---|
+| 1 | ▶ / ⏸ | Play/pause. A spinner glyph replaces it while the wall is buffering. |
+| 1 | timeline + `0:32 / 2:42` | Click or drag to seek. The target time (and the chapter there, if the recording has segments) previews in the HUD while you drag. |
+| 1 | 🔊 / 🔇 | Mute the session. Keeps the volume level — unmuting comes back to exactly where you were. |
+| 1 | `−` `100%` `+` | Master volume in 10 % steps. Only the master stream carries audio; see the sync engine. |
+| 1 | CC | Subtitles on/off. Greyed out for a recording with no captions. |
+| 1 | `Aa` `S`/`M`/`L` | Caption **size**, cycling. See the note below. |
+| 2 | `Home > Reihe > Aufzeichnung` | Where you are. **Home** goes back to the library (it replaced the old "Bibliothek" button); **Reihe** opens the library already showing that series' recordings; the current recording's own crumb does nothing. The series crumb is absent for a recording that has no series. |
+| 2 | ⏮ ⏭ | Previous/next recording of the series, in the series' own order, skipping ones with nothing to play. Disabled at either end, absent for a series-less recording. Switching **never autoplays** — the next lecture lands paused at 0. |
+
+The **"Info" window** carries the metadata (title, creators, series) and the
+"no captions for this recording" note. It has no controls: it used to be
+called "Steuerung" and hold the volume stepper and the subtitle toggle, both
+of which moved to the dock.
+
+**Caption size defaults small on purpose.** uikit's pixel-to-meter conversion
+is fixed at 0.01 m/px, which makes the caption panel's raw design size about
+5.6 m wide hanging 1.2 m from your eyes — inside a magic-window frustum only
+about 2.7 m wide. The three size steps are a browser-measured retune (the
+panel is 0.9–1.7 m wide, 44–80 % of the canvas at 4:3, all three clearing both
+edges); the mechanism is a `<group scale>` around `<HeadLocked>`, which
+`sphere-shell` documents and which keeps uikit's SDF glyphs crisp at any
+factor. **The headset look is unverified** — see the Quest checklist.
 
 ### Dev-only test aids
 
