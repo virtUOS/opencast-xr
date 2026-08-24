@@ -41,38 +41,80 @@ checklist.
 ## Controls
 
 Everything you operate while watching is in the **dock**, the strip below the
-windows — one place, always in reach, always aimable with a controller ray. It
-has two rows in player mode (browse mode shows no transport at all):
+windows — one place, always in reach, always aimable with a controller ray. In
+player mode it is one large Play/Pause square spanning two rows, and beside it
+two rows of everything else (browse mode shows no transport at all):
 
 | Row | Control | What it does |
 |---|---|---|
-| 1 | ▶ / ⏸ | Play/pause. A spinner glyph replaces it while the wall is buffering. |
-| 1 | timeline + `0:32 / 2:42` | Click or drag to seek. The target time (and the chapter there, if the recording has segments) previews in the HUD while you drag. |
-| 1 | 🔊 / 🔇 | Mute the session. Keeps the volume level — unmuting comes back to exactly where you were. |
-| 1 | `−` `100%` `+` | Master volume in 10 % steps. Only the master stream carries audio; see the sync engine. |
-| 1 | CC | Subtitles on/off. Greyed out for a recording with no captions. |
-| 1 | `Aa` `S`/`M`/`L` | Caption **size**, cycling. See the note below. |
-| 2 | `Home > Reihe > Aufzeichnung` | Where you are. **Home** goes back to the library (it replaced the old "Bibliothek" button); **Reihe** opens the library already showing that series' recordings; the current recording's own crumb does nothing. The series crumb is absent for a recording that has no series. |
+| both | ▶ / ⏸ | Play/pause, as a 60 px square spanning both rows — the biggest target in the strip, because it is the one control you reach for without looking. A spinner glyph replaces it while the wall is buffering. |
+| 1 | `0:32` timeline `2:42` | The timeline, and nothing else, across the whole width of the dock's control block. Click or drag to seek; the target time (and the chapter there, if the recording has segments) previews in the HUD while you drag. The position and duration readouts flank it, where they have always been. |
+| 2 | `Home > Reihe > Aufzeichnung` | Where you are. **Home** goes back to the library; **Reihe** opens the library already showing that series' recordings; **the current recording's crumb opens the Reihe window** (and closes it again) — it carries a list icon to say so. The series crumb, and the icon, are absent for a recording with no series. |
 | 2 | ⏮ ⏭ | Previous/next recording of the series, in the series' own order, skipping ones with nothing to play. Disabled at either end, absent for a series-less recording. Switching **never autoplays** — the next lecture lands paused at 0. |
+| 2 | CC | Subtitles on/off. Greyed out for a recording with no captions. |
+| 2 | `Aa` `−` `100%` `+` | Caption **size**, in 12 % steps of the current size. **Only while captions are on.** |
+| 2 | ▲ ▼ | Moves the caption up or down, 3° of pitch a press, ±12°. **Only while captions are on.** |
+| 2 | 🔊 / 🔇 | Mute the session. Keeps the volume level — unmuting comes back to exactly where you were. |
+| 2 | `−` `100%` `+` | Master volume in 10 % steps. Only the master stream carries audio; see the sync engine. |
+| 2 | ⓘ | Opens (and closes) the **Info** window. |
 
-The **"Info" window** carries the metadata (title, creators, series) and the
-"no captions for this recording" note. It has no controls: it used to be
-called "Steuerung" and hold the volume stepper and the subtitle toggle, both
-of which moved to the dock.
+To the right of the app's own controls sit sphere-shell's two: a **`...` menu**
+holding Arrange, Recenter and the experimental Curved/Flat toggle, and — only
+inside a session — a red **X** that ends it (hover it for an "Exit VR" label).
+
+**The timeline takes its width by construction, not by a constant.** The column
+of two rows sizes itself to its widest child, which is always row 2; row 1
+stretches to that width; and only the track grows into what row 1 has left over.
+So it re-solves itself when the caption buttons appear, when the breadcrumb
+changes, or when a recording has no series.
+
+### What is on screen when a recording opens
+
+**Only the video windows**, and as large as the comfortable field of view
+allows: one stream gets 64° of azimuth centred straight ahead, a pair gets 52°
+each at ±27°. Both are derived from a usable arc of about ±55° (a Quest 3 sees
+roughly 110° at once) and from the dock's own −30° elevation, not chosen by eye.
+A third stream and beyond keeps the earlier layout: 40° mains, 24° flanks.
+
+**Kapitel, Transkript, Reihe and Info start closed**, each as a dock tile — the
+same closed-window tile the shell already uses, so getting one back is the
+click you already know. The Reihe window also opens from the breadcrumb's last
+crumb and Info from the dock's ⓘ. Opening a *different* recording from within
+player mode leaves whatever you arranged alone; the panels only start closed
+when you enter player mode from the library.
+
+### Caption size and position
 
 **Caption size defaults small on purpose.** uikit's pixel-to-meter conversion
 is fixed at 0.01 m/px, which makes the caption panel's raw design size about
 5.6 m wide hanging 1.2 m from your eyes — inside a magic-window frustum only
-about 2.7 m wide. The three size steps are a browser-measured retune (the
-panel is 0.9–1.7 m wide, 44–80 % of the canvas at 4:3, all three clearing both
-edges). The mechanism is one factor multiplied into the caption panel's own
-design pixels — font size, padding, corner radius and max width together, which
-is a uniform scale rather than a reflow, and keeps uikit's SDF glyphs crisp at
-any factor. Only the caption scales; the seek-feedback readout it shares the HUD
-with stays a fixed size. **The headset look is unverified** — see the Quest
-checklist.
+about 2.7 m wide. The scale runs 0.09 to 0.32 with 0.16 the default; the ladder
+is **multiplicative** (12 % of the current size per press), because a fixed
+increment is a 22 % jump at the small end and a 6 % nudge at the large one. The
+readout is a percentage of the default, so "100 %" is where everyone starts.
+
+The mechanism is one factor multiplied into the caption panel's own design
+pixels — font size, padding, corner radius and max width together, which is a
+uniform scale rather than a reflow, and keeps uikit's SDF glyphs crisp at any
+factor. Only the caption scales; the seek-feedback readout it shares the HUD
+with stays a fixed size.
+
+▲/▼ move the whole head-locked HUD's resting pitch, ±12° around its default of
+15° below your gaze — far enough to get the captions off a subtitle burned into
+the video, not far enough to put them on the video's middle or down in the dock.
+
+Both settings **persist across reloads** (one `localStorage` key,
+`opencastxr.player.caption`). They are accessibility settings: a control that
+has to be re-found on every visit gets pressed once and then endured. A storage
+that is missing, full, or forbidden is not an error — the setting simply applies
+for this session only.
+
+The defaults were retuned after the first headset session ("L ist zu groß … S
+ist gefühlt auch noch ein wenig zu groß"): the default is now below what used to
+be the smallest step, with five more presses available underneath it.
 
 ### Dev-only test aids
+
 
 The flat page's top-left overlay carries two checkboxes that exist **only in a
 dev build** (`import.meta.env.DEV`; a production build drops them and the code
@@ -187,8 +229,8 @@ and the HUD only ever *displays*).
 
 ## Known limitations
 
-- **Curved-window mode scrubs imprecisely.** With the dock's experimental
-  "Curved" mode on, timeline drags land up to ~6.4 % off near the panel's
+- **Curved-window mode scrubs imprecisely.** With the experimental "Curved"
+  mode on (the dock's `...` menu), timeline drags land up to ~6.4 % off near the panel's
   edges: the bend is a vertex-shader effect the pointer maths cannot see.
   Clamping and monotonicity still hold and **flat mode, the default, is
   exact**. A proper fix needs a new `sphere-shell` API (a dock bend frame, or
