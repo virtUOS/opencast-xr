@@ -76,15 +76,21 @@ export function videoWindowPlacement(index: number): VideoWindowPlacement {
  * the window's own X is vetoed (closed and immediately restored - see
  * 'veto-close'), and single-flavor recordings are the overwhelming majority of
  * a real Opencast corpus. The reload button covers a transient failure; this
- * line covers a permanent one, and „Bibliothek" in the dock is the actual
+ * line covers a permanent one, and the dock's „Home" crumb is the actual
  * escape. With another stream still up there is nothing to explain - the X
  * works, and the rest of the wall keeps playing.
+ *
+ * NAMES THE CONTROL THAT EXISTS. It used to say „über Bibliothek im Dock",
+ * which was correct until the dock UX round replaced that button with the
+ * breadcrumb's „Home" crumb - at which point this line was pointing the user,
+ * in their only way out of a dead stream, at something no longer on screen. If
+ * the breadcrumb is ever renamed again, this string goes with it.
  *
  * @param canClose `PlayerStore.canClose(flavorType)` for this window's stream.
  */
 export function streamErrorEscapeHint(canClose: boolean): string | null {
   if (canClose) return null
-  return 'Einziger Stream dieser Aufzeichnung - hilft Neu laden nicht, zurück über Bibliothek im Dock.'
+  return 'Einziger Stream dieser Aufzeichnung - hilft Neu laden nicht, zurück über Home im Dock.'
 }
 
 export type StreamWindowAction =

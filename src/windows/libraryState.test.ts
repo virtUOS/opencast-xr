@@ -139,7 +139,7 @@ describe('createLibraryState', () => {
     expect(store.getState().seriesError).toBeNull()
   })
 
-  it('loadSeries surfaces a rejection as seriesError, and retry() re-runs it', async () => {
+  it('loadSeries surfaces a rejection as seriesError, and retrySeries() re-runs it', async () => {
     const client = makeClient()
     client.listSeries.mockRejectedValueOnce(new Error('network down'))
     const store = createLibraryState(client)
@@ -149,7 +149,7 @@ describe('createLibraryState', () => {
     expect(store.getState().series).toEqual([])
 
     client.listSeries.mockResolvedValueOnce([{ id: 's1', title: 'Series One' }])
-    await store.getState().retry()
+    await store.getState().retrySeries()
 
     expect(store.getState().seriesError).toBeNull()
     expect(store.getState().series).toEqual([{ id: 's1', title: 'Series One' }])
@@ -225,7 +225,7 @@ describe('createLibraryState', () => {
     expect(store.getState().episodesHasMore).toBe(true) // raw offset 3 < raw total 4 - one more page to scan
   })
 
-  it('an episodes fetch failure sets episodesError without touching the already-loaded list, and retry() re-requests the SAME page', async () => {
+  it('an episodes fetch failure sets episodesError without touching the already-loaded list, and retryEpisodes() re-requests the SAME page', async () => {
     const client = makeClient()
     client.listEpisodes.mockResolvedValueOnce({ episodes: [makeEpisode({ id: 'e1' })], total: 3 })
     const store = createLibraryState(client)
@@ -238,7 +238,7 @@ describe('createLibraryState', () => {
     expect(store.getState().episodes.map((e) => e.id)).toEqual(['e1']) // unchanged, not reset
 
     client.listEpisodes.mockResolvedValueOnce({ episodes: [makeEpisode({ id: 'e2' })], total: 3 })
-    await store.getState().retry()
+    await store.getState().retryEpisodes()
 
     // Retry re-requested offset 1 (the page that failed), not offset 0.
     expect(client.listEpisodes).toHaveBeenLastCalledWith({ sid: 's1', limit: 12, offset: 1 })
@@ -264,10 +264,113 @@ describe('createLibraryState', () => {
     expect(store.getState().series).toEqual([{ id: 's1', title: 'Series One' }]) // still cached
     expect(client.listSeries).toHaveBeenCalledTimes(1) // not refetched
 
-    // retry() after back() is a no-op (the stale action was dropped), not a
-    // resurrection of the episodes-level error.
-    await store.getState().retry()
+    // retryEpisodes() after back() is a no-op (the stale action was dropped),
+    // not a resurrection of the episodes-level error.
+    await store.getState().retryEpisodes()
     expect(store.getState().level).toEqual({ kind: 'series' })
+  })
+
+  // Review round, I1: LibraryWindow starts loadSeries() AND enterSeries() in
+  // the SAME commit now that the dock breadcrumb's „Reihe" crumb can open
+  // browse mode straight at level 2 (level 1 still has to load, because
+  // „< Zurück" goes there). That put the two kinds of fetch in flight
+  // together for the first time - which one shared retry slot could not
+  // survive.
+  describe('concurrent series + episodes fetches (review round I1)', () => {
+    it('a RESOLVING series load does not disarm the failed episodes retry', async () => {
+      const client = makeClient()
+      const series = deferred<Series[]>()
+      const episodes = deferred<{ episodes: Episode[]; total: number }>()
+      client.listSeries.mockReturnValueOnce(series.promise)
+      client.listEpisodes.mockReturnValueOnce(episodes.promise)
+      const store = createLibraryState(client)
+
+      // Exactly what the window does on the first frame of a scoped browse.
+      const seriesRun = store.getState().loadSeries()
+      const episodesRun = store.getState().enterSeries('s1', 'Series One')
+
+      // The interleave that used to lose the retry: episodes reject FIRST
+      // (arming the slot), then the series load resolves (which, with one
+      // shared slot, cleared it as "nothing is failing any more").
+      episodes.reject(new Error('episodes timeout'))
+      await episodesRun
+      series.resolve([{ id: 's1', title: 'Series One' }])
+      await seriesRun
+
+      expect(store.getState().episodesError).toBe('episodes timeout')
+      expect(store.getState().seriesError).toBeNull()
+
+      // ...and the banner's button must actually refetch the failed page.
+      client.listEpisodes.mockResolvedValueOnce({ episodes: [makeEpisode({ id: 'e1' })], total: 1 })
+      await store.getState().retryEpisodes()
+
+      expect(client.listEpisodes).toHaveBeenLastCalledWith({ sid: 's1', limit: 12, offset: 0 })
+      expect(store.getState().episodesError).toBeNull()
+      expect(store.getState().episodes.map((e) => e.id)).toEqual(['e1'])
+    })
+
+    it('a RESOLVING episodes fetch does not disarm the failed series retry', async () => {
+      // The mirror image, so neither slot can be "fixed" by clearing the other.
+      const client = makeClient()
+      const series = deferred<Series[]>()
+      const episodes = deferred<{ episodes: Episode[]; total: number }>()
+      client.listSeries.mockReturnValueOnce(series.promise)
+      client.listEpisodes.mockReturnValueOnce(episodes.promise)
+      const store = createLibraryState(client)
+
+      const seriesRun = store.getState().loadSeries()
+      const episodesRun = store.getState().enterSeries('s1', 'Series One')
+
+      series.reject(new Error('series down'))
+      await seriesRun
+      episodes.resolve({ episodes: [makeEpisode({ id: 'e1' })], total: 1 })
+      await episodesRun
+
+      expect(store.getState().seriesError).toBe('series down')
+      expect(store.getState().episodesError).toBeNull()
+
+      client.listSeries.mockResolvedValueOnce([{ id: 's1', title: 'Series One' }])
+      await store.getState().retrySeries()
+
+      expect(store.getState().seriesError).toBeNull()
+      expect(store.getState().series).toEqual([{ id: 's1', title: 'Series One' }])
+    })
+
+    it('each retry drives only its own fetch - they are not one button in disguise', async () => {
+      const client = makeClient()
+      client.listSeries.mockRejectedValueOnce(new Error('series down'))
+      client.listEpisodes.mockRejectedValueOnce(new Error('episodes down'))
+      const store = createLibraryState(client)
+      await store.getState().loadSeries()
+      await store.getState().enterSeries('s1', 'Series One')
+      const seriesCalls = client.listSeries.mock.calls.length
+      const episodeCalls = client.listEpisodes.mock.calls.length
+
+      client.listSeries.mockResolvedValueOnce([])
+      await store.getState().retrySeries()
+
+      expect(client.listSeries.mock.calls.length).toBe(seriesCalls + 1)
+      expect(client.listEpisodes.mock.calls.length).toBe(episodeCalls) // untouched
+      expect(store.getState().episodesError).toBe('episodes down') // still failed, still retryable
+    })
+
+    it('back() keeps a failed SERIES retry alive - level 1 is where it is going', async () => {
+      const client = makeClient()
+      client.listSeries.mockRejectedValueOnce(new Error('series down'))
+      client.listEpisodes.mockResolvedValueOnce({ episodes: [], total: 0 })
+      const store = createLibraryState(client)
+      await store.getState().loadSeries()
+      await store.getState().enterSeries('s1', 'Series One')
+
+      store.getState().back()
+      expect(store.getState().seriesError).toBe('series down')
+
+      client.listSeries.mockResolvedValueOnce([{ id: 's1', title: 'Series One' }])
+      await store.getState().retrySeries()
+
+      expect(store.getState().seriesError).toBeNull()
+      expect(store.getState().series).toEqual([{ id: 's1', title: 'Series One' }])
+    })
   })
 
   // Code review findings I1(A)/(B): two concurrency bugs in the pagination/

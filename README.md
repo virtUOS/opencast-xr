@@ -65,9 +65,12 @@ is fixed at 0.01 m/px, which makes the caption panel's raw design size about
 5.6 m wide hanging 1.2 m from your eyes — inside a magic-window frustum only
 about 2.7 m wide. The three size steps are a browser-measured retune (the
 panel is 0.9–1.7 m wide, 44–80 % of the canvas at 4:3, all three clearing both
-edges); the mechanism is a `<group scale>` around `<HeadLocked>`, which
-`sphere-shell` documents and which keeps uikit's SDF glyphs crisp at any
-factor. **The headset look is unverified** — see the Quest checklist.
+edges). The mechanism is one factor multiplied into the caption panel's own
+design pixels — font size, padding, corner radius and max width together, which
+is a uniform scale rather than a reflow, and keeps uikit's SDF glyphs crisp at
+any factor. Only the caption scales; the seek-feedback readout it shares the HUD
+with stays a fixed size. **The headset look is unverified** — see the Quest
+checklist.
 
 ### Dev-only test aids
 

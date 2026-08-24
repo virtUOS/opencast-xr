@@ -85,8 +85,29 @@ export interface LibraryState {
   enterSeries(sid: string, title: string): Promise<void>
   enterSingles(): Promise<void>
   loadMoreEpisodes(): Promise<void>
-  /** Re-runs whichever async action last failed (a series load, an initial episodes fetch, or a loadMore) - a no-op if nothing failed. */
-  retry(): Promise<void>
+  /**
+   * Re-runs the failed SERIES load (level 1) - a no-op if that one didn't fail.
+   *
+   * ## Why this is two methods and not one `retry()`
+   *
+   * It used to be one, over a single `lastFailedAction` slot, and that was
+   * sound only while the two kinds of fetch could not be in flight at the same
+   * time. The dock breadcrumb's „Reihe" crumb broke that: `LibraryWindow` now
+   * starts `loadSeries()` AND `enterSeries()` in the same commit (level 1 has
+   * to be loaded because „< Zurück" from the scoped level 2 goes there), so
+   * both are running concurrently on the first frame of browse mode.
+   *
+   * With one slot the failure interleaves silently. The episodes fetch rejects
+   * and arms the slot with its own retry; the series load then RESOLVES and
+   * clears the slot as "nothing is failing any more" - and the episodes error
+   * banner is still on screen with a „Erneut versuchen" button that now does
+   * nothing at all. One slot per concern is the fix, and it makes each
+   * button's action structurally the one next to it rather than whichever
+   * failure happened to be last.
+   */
+  retrySeries(): Promise<void>
+  /** Re-runs whichever EPISODES fetch last failed - an initial page for a scope, or a "Mehr laden". A no-op if that one didn't fail. Kept separate from `retrySeries` - see its doc comment. */
+  retryEpisodes(): Promise<void>
   /** Level 2 -> level 1. Series stay cached (no refetch); the episode list and any episodes error are dropped. */
   back(): void
 }
@@ -135,14 +156,21 @@ export function toEpisodeTile(ep: Episode): EpisodeTile {
 
 export function createLibraryState(client: LibraryClient) {
   const store = createStore<LibraryState>()((set, get) => {
-    // Set once an attempt fails, cleared once one succeeds. Re-invoking it IS
-    // retry(): it re-enters the same guarded path (runEpisodesFetch /
+    // Set once an attempt fails, cleared once one succeeds. Re-invoking one IS
+    // the retry: it re-enters the same guarded path (runEpisodesFetch /
     // loadSeries' own attempt), so a retry that fails again correctly
     // re-arms itself instead of throwing unhandled - and a loadMore retry
     // re-requests the SAME page rather than resetting the list, because the
     // `reset` flag was captured in the closure when the action was first
     // built, not re-derived from state.
-    let lastFailedAction: (() => Promise<void>) | null = null
+    //
+    // ONE SLOT PER CONCERN, not one shared slot: the two kinds of fetch run
+    // CONCURRENTLY on the first frame of browse mode now that the breadcrumb's
+    // „Reihe" crumb exists, and a shared slot lets a resolving series load
+    // silently disarm a failed episodes retry. See `retrySeries`'s doc comment
+    // for the full interleave.
+    let lastFailedSeriesAction: (() => Promise<void>) | null = null
+    let lastFailedEpisodesAction: (() => Promise<void>) | null = null
 
     // Bumped by enterSeries/enterSingles/back - i.e. every genuine scope
     // change. NOT bumped by loadMoreEpisodes (continues the SAME scope's
@@ -191,13 +219,13 @@ export function createLibraryState(client: LibraryClient) {
       try {
         await action()
         if (gen !== episodesGeneration) return // stale - see fetchEpisodesPage's doc
-        lastFailedAction = null
+        lastFailedEpisodesAction = null
       } catch (err) {
         // Stale rejection: don't paint an error banner over a scope the
         // user has since navigated away from.
         if (gen !== episodesGeneration) return
         set({ episodesLoading: false, episodesError: errorMessage(err) })
-        lastFailedAction = attempt
+        lastFailedEpisodesAction = attempt
       }
     }
 
@@ -222,10 +250,10 @@ export function createLibraryState(client: LibraryClient) {
           try {
             const series = await get().client.listSeries()
             set({ series, seriesLoading: false, seriesError: null })
-            lastFailedAction = null
+            lastFailedSeriesAction = null
           } catch (err) {
             set({ seriesLoading: false, seriesError: errorMessage(err) })
-            lastFailedAction = attempt
+            lastFailedSeriesAction = attempt
           }
         }
         await attempt()
@@ -235,8 +263,10 @@ export function createLibraryState(client: LibraryClient) {
         const scope: EpisodeScope = { type: 'series', sid, title }
         // Drop a stale episodes-retry action too: it belongs to the scope
         // being left, and re-running it after switching would silently
-        // refill state for a scope the user is no longer looking at.
-        lastFailedAction = null
+        // refill state for a scope the user is no longer looking at. The
+        // SERIES slot is untouched - a failed level-1 load is still failed,
+        // and its banner is still what the user meets on „< Zurück".
+        lastFailedEpisodesAction = null
         episodesGeneration += 1
         const gen = episodesGeneration
         set({
@@ -251,7 +281,7 @@ export function createLibraryState(client: LibraryClient) {
 
       async enterSingles() {
         const scope: EpisodeScope = { type: 'singles' }
-        lastFailedAction = null
+        lastFailedEpisodesAction = null
         episodesGeneration += 1
         const gen = episodesGeneration
         set({
@@ -278,15 +308,21 @@ export function createLibraryState(client: LibraryClient) {
         await runEpisodesFetch(() => fetchEpisodesPage(level.scope, false, episodesGeneration), episodesGeneration)
       },
 
-      async retry() {
-        if (lastFailedAction) await lastFailedAction()
+      async retrySeries() {
+        if (lastFailedSeriesAction) await lastFailedSeriesAction()
+      },
+
+      async retryEpisodes() {
+        if (lastFailedEpisodesAction) await lastFailedEpisodesAction()
       },
 
       back() {
-        // Drop a stale episodes-retry action too, and bump the generation
-        // so a fetch still in flight for the scope being left can't land on
-        // the series level's state either - see episodesGeneration's doc.
-        lastFailedAction = null
+        // Drop a stale episodes-retry action, and bump the generation so a
+        // fetch still in flight for the scope being left can't land on the
+        // series level's state either - see episodesGeneration's doc. The
+        // series slot is deliberately KEPT: level 1 is exactly where we are
+        // going, so if its load failed, its banner and its retry are live.
+        lastFailedEpisodesAction = null
         episodesGeneration += 1
         set({
           level: { kind: 'series' },

@@ -2,19 +2,13 @@ import { createStore } from 'zustand'
 import type { Cue, Episode } from '../opencast/types'
 import type { OpencastClient } from '../opencast/client'
 import { selectStreams } from '../opencast/selectTracks'
-// The one import that points from `player/` into `windows/`, against this
-// app's usual direction (windows read the store, not the other way round).
-// Deliberate: `subtitleScale`'s default has to BE one of the size steps the
-// dock's own button cycles through, and a second copy of that number here
-// would silently drift from the steps array the moment either is retuned -
-// which is exactly the class of bug the browser-first retune was fixing. The
-// module holds pure constants and pure functions only, and imports nothing
-// from `player/`, so there is no cycle.
-import {
-  DEFAULT_SUBTITLE_SCALE,
-  MAX_SUBTITLE_SCALE,
-  MIN_SUBTITLE_SCALE,
-} from '../windows/subtitleHudState'
+// `src/captionScale.ts` is a leaf module with no imports of its own,
+// deliberately at `src/` rather than in `windows/`: `subtitleScale`'s default
+// has to BE one of the size steps the dock's own button cycles through, so both
+// this layer and `windows/` need the constants, and a second copy of the
+// default here would silently drift from the steps array the moment either is
+// retuned. Same arrangement as `src/time.ts`.
+import { DEFAULT_CAPTION_SCALE, MAX_CAPTION_SCALE, MIN_CAPTION_SCALE } from '../captionScale'
 import { SyncEngine } from './syncEngine'
 import { createStreamElement, destroyStreamElement } from './mediaElements'
 
@@ -60,7 +54,9 @@ export interface StreamState {
  * `title` is carried along rather than looked up again: the crumb already knows
  * the series' display name (from the open episode's `seriesTitle`), and
  * `enterSeries` wants one immediately - without it the level-2 header would
- * read as a raw series id until an unrelated fetch happened to fill it in.
+ * read as a raw series id until an unrelated fetch happened to fill it in. It
+ * is the UNtruncated title, not the crumb's own cut-to-fit label, because
+ * `LibraryWindow`'s level-2 header renders it where there is room for all of it.
  */
 export interface BrowseTarget {
   kind: 'series'
@@ -77,16 +73,16 @@ export interface PlayerStore {
   cues: Cue[]
   subtitlesOn: boolean
   /**
-   * How large the head-locked caption HUD renders, as the uniform scale
-   * `SubtitleHud` applies via a `<group scale>` around `<HeadLocked>` (the
-   * mechanism sphere-shell's README documents for rescaling a head-locked
-   * container). Lives here, not in the HUD's own `useState`, because the
-   * control that changes it is in the DOCK and the thing it changes is the HUD
-   * - two different subtrees, so there is no component that could own it.
+   * How large the head-locked caption panel renders: the factor `SubtitleHud`
+   * multiplies that panel's own design pixels by (font size, padding, corner
+   * radius, `maxWidth` - all of them, which is what makes it a uniform scale
+   * rather than a reflow). Lives here, not in the HUD's own `useState`, because
+   * the control that changes it is in the DOCK and the thing it changes is the
+   * HUD - two different subtrees, so there is no component that could own it.
    *
    * A plain number rather than a step index: the store's job is to hold one
    * clamped, positive scale, and WHICH values are offered is the dock's
-   * business (`SUBTITLE_SCALE_STEPS` in `windows/subtitleHudState.ts`). See
+   * business (`CAPTION_SCALE_STEPS` in `../captionScale.ts`). See
    * `setSubtitleScale`.
    */
   subtitleScale: number
@@ -364,7 +360,7 @@ export function createPlayerStore(client: OpencastClient) {
       streams: [],
       cues: [],
       subtitlesOn: true,
-      subtitleScale: DEFAULT_SUBTITLE_SCALE,
+      subtitleScale: DEFAULT_CAPTION_SCALE,
       // These two seed the mirror to `SyncEngine`'s own constructor defaults
       // (masterVolume 1, masterMuted false). Asserted in store.test.tsx rather
       // than left as a comment, so a change to either default that forgets the
@@ -611,8 +607,8 @@ export function createPlayerStore(client: OpencastClient) {
         // bound: `Math.min/max` with NaN yields NaN, and a NaN reaching a
         // `<group scale>` makes the whole HUD silently vanish (no error, no
         // console warning) - the worst possible failure for a caption.
-        const safe = Number.isFinite(next) ? next : DEFAULT_SUBTITLE_SCALE
-        set({ subtitleScale: Math.min(MAX_SUBTITLE_SCALE, Math.max(MIN_SUBTITLE_SCALE, safe)) })
+        const safe = Number.isFinite(next) ? next : DEFAULT_CAPTION_SCALE
+        set({ subtitleScale: Math.min(MAX_CAPTION_SCALE, Math.max(MIN_CAPTION_SCALE, safe)) })
       },
 
       setVolume(v) {

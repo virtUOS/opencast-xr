@@ -119,3 +119,66 @@ export function adjacentEpisodes<T extends { id: string }>(episodes: T[], curren
 export function playableEpisodes(episodes: Episode[]): Episode[] {
   return episodes.filter((e) => selectStreams(e.tracks).length > 0)
 }
+
+/**
+ * Whether the previous/next controls still need another page of the series
+ * before they can answer honestly - i.e. whether the caller should call
+ * `seriesState`'s `loadMore()`.
+ *
+ * ## The bug this exists for (review round, I3)
+ *
+ * `seriesState` pages at 12, and only page 1 is fetched on arrival. Without
+ * this, `adjacentEpisodes` was being asked about a list that stops at 12 and
+ * answering `null` with total confidence, so:
+ * - the 12th recording of a 20-part series rendered as the END of the series
+ *   („Weiter" greyed out, with eight more lectures sitting on page 2), and
+ * - a recording that is itself ON page 2 - reachable through the library's own
+ *   „Mehr laden", or a deep link - was not in the fetched list at all, so BOTH
+ *   controls were disabled forever.
+ *
+ * Both were silent: a disabled button looks exactly like the honest end of a
+ * series. Neither the fetched list nor `hasMore` was wrong; nothing was asking
+ * for the next page.
+ *
+ * ## Why this shape
+ *
+ * A predicate the caller re-evaluates, rather than "load the next page when the
+ * button is pressed". Paging on press would mean a button that is enabled but
+ * does nothing for a moment, and it could not fix the second case at all
+ * (nothing to press - both controls are disabled). Driving it from state
+ * instead converges: each page that arrives is a fresh answer, so the loop runs
+ * until either the open recording has a playable successor in hand or the
+ * server says there is nothing left (`hasMore` false). The controls stay a pure
+ * function of the fetched list, and their brief disabled state while a page is
+ * in flight is the same honest "not known yet" that
+ * `adjacentEpisodes` already documents.
+ *
+ * `loading` is part of the predicate, not the caller's problem: it is what
+ * keeps the convergence from firing a second request for the same page while
+ * the first is in flight (`seriesState.loadMore` would refuse anyway, but a
+ * predicate that says "yes" while a fetch is running invites a render loop).
+ *
+ * Returns false once the open recording is fetched and has a playable
+ * successor, and false for a recording that is fetched but has nothing playable
+ * itself - there is no neighbourhood to complete for it, so paging the whole
+ * series to discover that would be pointless traffic.
+ */
+export function needsMoreEpisodes(
+  fetched: Episode[],
+  currentId: string,
+  hasMore: boolean,
+  loading: boolean,
+): boolean {
+  if (!hasMore || loading) return false
+  // Not fetched yet at all: the neighbourhood is unknown, so keep paging - this
+  // is the "open recording is on page 2" case.
+  if (!fetched.some((e) => e.id === currentId)) return true
+  const playable = playableEpisodes(fetched)
+  // Fetched, but not playable itself: prev/next have no meaning here (the
+  // controls step through the playable list), so stop.
+  if (!playable.some((e) => e.id === currentId)) return false
+  // Fetched and playable, but nothing playable after it - the successor may be
+  // on the next page. This is the "12th of 20" case, and also covers a tail of
+  // unplayable recordings at the end of the fetched list.
+  return adjacentEpisodes(playable, currentId).next === null
+}

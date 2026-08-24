@@ -5,6 +5,7 @@ import {
   HOME_LABEL,
   adjacentEpisodes,
   breadcrumbTrail,
+  needsMoreEpisodes,
   playableEpisodes,
 } from './breadcrumbState'
 
@@ -154,5 +155,78 @@ describe('playableEpisodes', () => {
 
   it('is empty rather than throwing for an empty list', () => {
     expect(playableEpisodes([])).toEqual([])
+  })
+})
+
+// Review round, I3: seriesState pages at 12 and only page 1 is fetched on
+// arrival, so adjacentEpisodes was answering "no next" about a list that simply
+// stops - silently, because a disabled button looks exactly like the end of a
+// series.
+describe('needsMoreEpisodes', () => {
+  /** A fetched page of `n` playable episodes, ids e1..en. */
+  const page = (n: number, from = 1) =>
+    Array.from({ length: n }, (_, i) => makeEpisode({ id: `e${from + i}` }))
+
+  it('THE PAGE BOUNDARY: episode 12 of 20 needs another page before "next" can be honest', () => {
+    const fetched = page(12) // page 1 of a 20-part series
+    // The pure part of the bug: adjacentEpisodes alone says "no next" here...
+    expect(adjacentEpisodes(playableEpisodes(fetched), 'e12').next).toBeNull()
+    // ...and this is what stops that from being rendered as end-of-series.
+    expect(needsMoreEpisodes(fetched, 'e12', true, false)).toBe(true)
+  })
+
+  it('...and once that page arrives, "next" works and no further page is asked for', () => {
+    const fetched = [...page(12), ...page(8, 13)] // both pages, 20 total
+    expect(needsMoreEpisodes(fetched, 'e12', false, false)).toBe(false)
+    expect(adjacentEpisodes(playableEpisodes(fetched), 'e12').next?.id).toBe('e13')
+  })
+
+  it('THE OPEN EPISODE IS ON PAGE 2: not in the fetched list at all, so keep paging', () => {
+    const fetched = page(12)
+    // Both controls are disabled in this state (adjacentEpisodes cannot place
+    // an id it has never seen), which is exactly why it must not be the
+    // resting state.
+    expect(adjacentEpisodes(playableEpisodes(fetched), 'e15')).toEqual({ previous: null, next: null })
+    expect(needsMoreEpisodes(fetched, 'e15', true, false)).toBe(true)
+  })
+
+  it('stops as soon as the open episode has a playable successor in hand', () => {
+    const fetched = page(12)
+    expect(needsMoreEpisodes(fetched, 'e11', true, false)).toBe(false)
+    expect(needsMoreEpisodes(fetched, 'e1', true, false)).toBe(false)
+  })
+
+  it('never asks for a page the server does not have', () => {
+    const fetched = page(12)
+    // Last episode of a series that really does end here: no next, and nothing
+    // to fetch - this is the honest end-of-series the buttons should show.
+    expect(needsMoreEpisodes(fetched, 'e12', false, false)).toBe(false)
+    // Not fetched AND nothing more to fetch: give up rather than loop.
+    expect(needsMoreEpisodes(fetched, 'e99', false, false)).toBe(false)
+  })
+
+  it('holds off while a page is already in flight, so the convergence cannot loop', () => {
+    const fetched = page(12)
+    expect(needsMoreEpisodes(fetched, 'e12', true, true)).toBe(false)
+    expect(needsMoreEpisodes(fetched, 'e15', true, true)).toBe(false)
+  })
+
+  it('pages past a tail of unplayable recordings to find a real successor', () => {
+    const fetched = [...page(10), makeEpisode({ id: 'skip', tracks: nonPlayableTrack() })]
+    // e10 has no PLAYABLE successor even though the raw list continues.
+    expect(needsMoreEpisodes(fetched, 'e10', true, false)).toBe(true)
+  })
+
+  it('does not page the whole series for a recording that has nothing playable itself', () => {
+    // Reachable via the "Reihe" window, which does not gate on playability.
+    // prev/next step through the playable list, so this recording has no
+    // neighbourhood to complete - paging to discover that is pointless traffic.
+    const fetched = [...page(5), makeEpisode({ id: 'dud', tracks: nonPlayableTrack() })]
+    expect(needsMoreEpisodes(fetched, 'dud', true, false)).toBe(false)
+  })
+
+  it('asks for the first page when nothing is fetched yet but the server has some', () => {
+    expect(needsMoreEpisodes([], 'e1', true, false)).toBe(true)
+    expect(needsMoreEpisodes([], 'e1', false, false)).toBe(false)
   })
 })

@@ -2,10 +2,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { OpencastClient } from '../opencast/client'
 import { derivePlaybackVisualState } from '../windows/transportState'
 import {
-  DEFAULT_SUBTITLE_SCALE,
-  MAX_SUBTITLE_SCALE,
-  MIN_SUBTITLE_SCALE,
-} from '../windows/subtitleHudState'
+  DEFAULT_CAPTION_SCALE,
+  MAX_CAPTION_SCALE,
+  MIN_CAPTION_SCALE,
+} from '../captionScale'
 import { createPlayerStore, type PlayerStoreApi } from './store'
 
 // Tracks every store created by makeStore() below so afterEach can dispose()
@@ -823,12 +823,12 @@ describe('createPlayerStore', () => {
     it('starts at the caption default and stores a value inside the offered range', () => {
       const { client } = makeClient()
       const store = makeStore(client)
-      expect(store.getState().subtitleScale).toBe(DEFAULT_SUBTITLE_SCALE)
+      expect(store.getState().subtitleScale).toBe(DEFAULT_CAPTION_SCALE)
 
-      store.getState().setSubtitleScale(MIN_SUBTITLE_SCALE)
-      expect(store.getState().subtitleScale).toBe(MIN_SUBTITLE_SCALE)
-      store.getState().setSubtitleScale(MAX_SUBTITLE_SCALE)
-      expect(store.getState().subtitleScale).toBe(MAX_SUBTITLE_SCALE)
+      store.getState().setSubtitleScale(MIN_CAPTION_SCALE)
+      expect(store.getState().subtitleScale).toBe(MIN_CAPTION_SCALE)
+      store.getState().setSubtitleScale(MAX_CAPTION_SCALE)
+      expect(store.getState().subtitleScale).toBe(MAX_CAPTION_SCALE)
     })
 
     it('clamps out-of-range values to the ends of the range', () => {
@@ -836,11 +836,11 @@ describe('createPlayerStore', () => {
       const store = makeStore(client)
 
       store.getState().setSubtitleScale(0)
-      expect(store.getState().subtitleScale).toBe(MIN_SUBTITLE_SCALE)
+      expect(store.getState().subtitleScale).toBe(MIN_CAPTION_SCALE)
       store.getState().setSubtitleScale(-3)
-      expect(store.getState().subtitleScale).toBe(MIN_SUBTITLE_SCALE)
+      expect(store.getState().subtitleScale).toBe(MIN_CAPTION_SCALE)
       store.getState().setSubtitleScale(50)
-      expect(store.getState().subtitleScale).toBe(MAX_SUBTITLE_SCALE)
+      expect(store.getState().subtitleScale).toBe(MAX_CAPTION_SCALE)
     })
 
     it('never lets a non-finite scale through - a NaN would make the whole HUD vanish', () => {
@@ -848,23 +848,23 @@ describe('createPlayerStore', () => {
       const store = makeStore(client)
 
       store.getState().setSubtitleScale(Number.NaN)
-      expect(store.getState().subtitleScale).toBe(DEFAULT_SUBTITLE_SCALE)
+      expect(store.getState().subtitleScale).toBe(DEFAULT_CAPTION_SCALE)
       store.getState().setSubtitleScale(Number.POSITIVE_INFINITY)
-      expect(store.getState().subtitleScale).toBe(DEFAULT_SUBTITLE_SCALE)
+      expect(store.getState().subtitleScale).toBe(DEFAULT_CAPTION_SCALE)
       expect(Number.isFinite(store.getState().subtitleScale)).toBe(true)
     })
 
     it('survives an episode swap and a return to browse - it is a viewer preference, not episode state', async () => {
       const { client } = makeClient()
       const store = makeStore(client)
-      store.getState().setSubtitleScale(MAX_SUBTITLE_SCALE)
+      store.getState().setSubtitleScale(MAX_CAPTION_SCALE)
 
       await store.getState().openEpisode('ep-1')
-      expect(store.getState().subtitleScale).toBe(MAX_SUBTITLE_SCALE)
+      expect(store.getState().subtitleScale).toBe(MAX_CAPTION_SCALE)
       await store.getState().openEpisode('ep-2')
-      expect(store.getState().subtitleScale).toBe(MAX_SUBTITLE_SCALE)
+      expect(store.getState().subtitleScale).toBe(MAX_CAPTION_SCALE)
       store.getState().toBrowse()
-      expect(store.getState().subtitleScale).toBe(MAX_SUBTITLE_SCALE)
+      expect(store.getState().subtitleScale).toBe(MAX_CAPTION_SCALE)
     })
   })
 

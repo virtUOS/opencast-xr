@@ -139,25 +139,35 @@ export function LibraryWindow({ store }: { store: PlayerStoreApi }) {
           seriesLoading && series.length === 0 ? (
             <Text fontSize={14} color="#9a9aa5" margin={12}>Lade Reihen...</Text>
           ) : seriesError ? (
-            <ErrorPanel message={seriesError} onRetry={() => void libraryStore.getState().retry()} />
+            <ErrorPanel message={seriesError} onRetry={() => void libraryStore.getState().retrySeries()} />
           ) : (
             <MediaList items={seriesItems} onSelect={selectSeriesLevelTile} emptyText="Keine Reihen gefunden." />
           )
         ) : (
           <>
-            <Container
-              flexDirection="row"
-              alignItems="center"
-              padding={10}
-              gap={8}
-              hover={{ backgroundColor: '#20202a' }}
-              onClick={(e) => {
-                e.stopPropagation()
-                setOpenError(null) // see selectSeriesLevelTile's comment - same stale-banner fix
-                libraryStore.getState().back()
-              }}
-            >
-              <Text fontSize={13} color="#cfd8ff">{BACK_LABEL}</Text>
+            <Container flexDirection="row" alignItems="center" padding={10} gap={10}>
+              <Container
+                paddingX={4}
+                paddingY={2}
+                borderRadius={4}
+                hover={{ backgroundColor: '#20202a' }}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setOpenError(null) // see selectSeriesLevelTile's comment - same stale-banner fix
+                  libraryStore.getState().back()
+                }}
+              >
+                <Text fontSize={13} color="#cfd8ff">{BACK_LABEL}</Text>
+              </Container>
+              {/* Which scope this level-2 list actually is. `EpisodeScope.title`
+                  has been carried since Task 11 without ever being rendered,
+                  and the dock breadcrumb made that a real gap: arriving here
+                  straight from a „Reihe" crumb, „< Zurück" alone does not say
+                  which series you landed in. The dock passes the UNtruncated
+                  title for exactly this line. */}
+              <Text fontSize={13} color="#9a9aa5">
+                {level.scope.type === 'series' ? level.scope.title : 'Einzelaufzeichnungen'}
+              </Text>
             </Container>
             {openError && (
               <Container flexDirection="row" alignItems="center" padding={10} gap={10} backgroundColor="#3a2028">
@@ -180,7 +190,16 @@ export function LibraryWindow({ store }: { store: PlayerStoreApi }) {
             {episodesLoading && episodes.length === 0 ? (
               <Text fontSize={14} color="#9a9aa5" margin={12}>Lade Aufzeichnungen...</Text>
             ) : episodesError ? (
-              <ErrorPanel message={episodesError} onRetry={() => void libraryStore.getState().retry()} />
+              <ErrorPanel
+                message={episodesError}
+                // retryEpisodes, not a shared retry(): this panel and the
+                // level-1 one are both reachable while the OTHER kind of fetch
+                // is still in flight (the breadcrumb's series crumb starts
+                // loadSeries and enterSeries in the same commit), and one
+                // shared retry slot let a resolving series load disarm this
+                // button - see retrySeries' doc comment in libraryState.ts.
+                onRetry={() => void libraryStore.getState().retryEpisodes()}
+              />
             ) : (
               <MediaList
                 items={episodeItems}

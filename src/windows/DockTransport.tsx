@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, type ReactNode } from 'react'
 import { useStore } from 'zustand'
 import type { ThreeEvent } from '@react-three/fiber'
 import { Container, Text, type VanillaContainer } from '@react-three/uikit'
@@ -28,8 +28,14 @@ import {
   transportTimeParts,
   volumeToPercent,
 } from './transportState'
-import { cycleSubtitleScale, subtitleScaleLabel } from './subtitleHudState'
-import { adjacentEpisodes, breadcrumbTrail, playableEpisodes, type Crumb } from './breadcrumbState'
+import { cycleCaptionScale, captionScaleLabel } from '../captionScale'
+import {
+  adjacentEpisodes,
+  breadcrumbTrail,
+  needsMoreEpisodes,
+  playableEpisodes,
+  type Crumb,
+} from './breadcrumbState'
 import {
   type DragEffect,
   type DragState,
@@ -283,6 +289,8 @@ export function DockTransport({
   const volume = useStore(store, (s) => s.volume)
   const muted = useStore(store, (s) => s.muted)
   const seriesEpisodes = useStore(seriesStore, (s) => s.episodes)
+  const seriesHasMore = useStore(seriesStore, (s) => s.hasMore)
+  const seriesLoading = useStore(seriesStore, (s) => s.loading)
   const durationS = (episode?.durationMs ?? 0) / 1000
 
   // Play intent comes straight from the store's own `playing` field, and this
@@ -436,7 +444,7 @@ export function DockTransport({
 
   const cycleSize = useCallback(() => {
     const state = store.getState()
-    state.setSubtitleScale(cycleSubtitleScale(state.subtitleScale))
+    state.setSubtitleScale(cycleCaptionScale(state.subtitleScale))
   }, [store])
 
   const trail = useMemo(
@@ -452,6 +460,31 @@ export function DockTransport({
     () => adjacentEpisodes(playableEpisodes(seriesEpisodes), episode?.id ?? ''),
     [seriesEpisodes, episode?.id],
   )
+
+  // Keep paging the series until the neighbours are actually knowable - see
+  // `needsMoreEpisodes` for the two silent failures this fixes (the 12th
+  // recording of a 20-part series rendering as the end of it, and a recording
+  // that is itself on page 2 disabling both controls forever). The predicate
+  // re-evaluates on every arriving page, so this converges and then stops; it
+  // holds off while a fetch is in flight, so it cannot spin.
+  //
+  // `lastRequestedAt` is the belt to that braces: `hasMore` is
+  // `offset < total`, so a server that answers a page with ZERO episodes while
+  // still claiming a larger total leaves the offset - and therefore `hasMore` -
+  // exactly where they were, and the predicate would stay true forever. One
+  // request per (episode, fetched-length) pair means such a page is requested
+  // once and then dropped, rather than fetched in a loop for as long as the
+  // dock is on screen.
+  const lastRequestedAt = useRef<{ id: string; length: number } | null>(null)
+  useEffect(() => {
+    const id = episode?.id
+    if (!id) return
+    if (!needsMoreEpisodes(seriesEpisodes, id, seriesHasMore, seriesLoading)) return
+    const previous = lastRequestedAt.current
+    if (previous && previous.id === id && previous.length === seriesEpisodes.length) return
+    lastRequestedAt.current = { id, length: seriesEpisodes.length }
+    void seriesStore.getState().loadMore()
+  }, [seriesStore, seriesEpisodes, episode?.id, seriesHasMore, seriesLoading])
 
   const openNeighbour = useCallback(
     (id: string | undefined) => {
@@ -481,9 +514,15 @@ export function DockTransport({
         return
       }
       if (crumb.sid == null) return // structurally impossible; breadcrumbTrail always sets it for 'series'
-      store.getState().toBrowse({ kind: 'series', sid: crumb.sid, title: crumb.label })
+      // The UNtruncated series title, read from the episode rather than taken
+      // from `crumb.label`: the label is cut to CRUMB_MAX_CHARS to fit the dock
+      // row, and this string is what the library's level-2 header then shows -
+      // where there is room for all of it. Falls back to the id exactly as
+      // `breadcrumbTrail` does.
+      const title = episode?.seriesTitle ?? crumb.sid
+      store.getState().toBrowse({ kind: 'series', sid: crumb.sid, title })
     },
-    [store],
+    [store, episode?.seriesTitle],
   )
 
   // Defensive only: App.tsx mounts this exclusively in player mode, which
@@ -609,7 +648,7 @@ export function DockTransport({
           }}
         >
           <ALargeSmall width={BUTTON_ICON_PX} height={BUTTON_ICON_PX} color={captionColor} />
-          <Text fontSize={11} color={captionColor}>{subtitleScaleLabel(subtitleScale)}</Text>
+          <Text fontSize={11} color={captionColor}>{captionScaleLabel(subtitleScale)}</Text>
         </Container>
       </Container>
 

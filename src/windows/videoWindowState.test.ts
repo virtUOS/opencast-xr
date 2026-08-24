@@ -25,10 +25,16 @@ describe('streamErrorEscapeHint', () => {
     const hint = streamErrorEscapeHint(false)
     expect(hint).not.toBeNull()
     // The escape has to be NAMED, not implied: with the X vetoed and the
-    // reload button re-failing against the same URL, "Bibliothek" is the only
-    // control that gets the user out of a permanently dead single-stream
-    // episode.
-    expect(hint).toContain('Bibliothek')
+    // reload button re-failing against the same URL, the dock's "Home" crumb
+    // is the only control that gets the user out of a permanently dead
+    // single-stream episode.
+    expect(hint).toContain('Home')
+    // ...and it must name a control that still EXISTS. The dock UX round
+    // replaced the old "Bibliothek" button with the breadcrumb's Home crumb,
+    // and this string went stale pointing at it - in the user's only way out
+    // of a dead stream. Asserted as an absence so the same drift fails loudly
+    // next time rather than shipping.
+    expect(hint).not.toContain('Bibliothek')
   })
 
   it('says nothing when another stream is still up', () => {

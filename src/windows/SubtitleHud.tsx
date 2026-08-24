@@ -2,6 +2,7 @@ import { useMemo, type ReactNode } from 'react'
 import { useStore } from 'zustand'
 import { Container, Text } from '@react-three/uikit'
 import { HeadLocked } from 'sphere-shell'
+import { DEFAULT_CAPTION_SCALE } from '../captionScale'
 import type { PlayerStoreApi } from '../player/store'
 import { activeCue, seekFeedback } from './subtitleHudState'
 import { normalizeCueText } from './transcriptState'
@@ -16,7 +17,43 @@ const HUD_BG = '#000000'
  * light enough that the picture stays visible through it.
  */
 const HUD_BG_OPACITY = 0.4
-const SUBTITLE_MAX_WIDTH_PX = 520
+
+/**
+ * The caption panel's DESIGN pixels, every one of which is multiplied by the
+ * store's `subtitleScale` before it reaches uikit - see `../captionScale.ts`
+ * for why the factors are all well under 1, and why scaling all of these
+ * together is a uniform scale rather than a reflow.
+ */
+const CAPTION_DESIGN = {
+  fontSize: 22,
+  paddingX: 20,
+  paddingY: 12,
+  borderRadius: 10,
+  maxWidth: 520,
+}
+
+/**
+ * The seek-feedback panel's own, FIXED scale: the caption's size control must
+ * not resize scrub feedback (the user asked for adjustable subtitles, and this
+ * panel is a transient readout, not a caption).
+ *
+ * Pinned to `DEFAULT_CAPTION_SCALE` rather than left at 1, and that is not
+ * cosmetic. The first cut of the size control scaled the whole `<HeadLocked>`
+ * with a `<group scale>`, so this panel's raw design pixels were always
+ * multiplied by the caption's factor too - which is the only reason they looked
+ * right. Confining the scale to the caption and leaving this at 1 was
+ * live-verified and looked wrong: the „1:30" readout rendered several times the
+ * height of the caption under it. Pinning it here keeps it at exactly the size
+ * it has always had at the default caption size, and independent of the user's
+ * choice from then on.
+ */
+const FEEDBACK_SCALE = DEFAULT_CAPTION_SCALE
+const FEEDBACK_DESIGN = {
+  fontSize: 16 * FEEDBACK_SCALE,
+  paddingX: 16 * FEEDBACK_SCALE,
+  paddingY: 8 * FEEDBACK_SCALE,
+  borderRadius: 8 * FEEDBACK_SCALE,
+}
 
 /**
  * Player-mode HUD: an open captions readout and non-interactive seek
@@ -37,9 +74,9 @@ const SUBTITLE_MAX_WIDTH_PX = 520
  *   backdrop (`HudPanel`, `HUD_BG_OPACITY`) that keeps white text readable
  *   without blacking out the picture behind it.
  *
- * Its world size is user-adjustable from the dock (`subtitleScale` on the
- * store, `<group scale>` here) - see `subtitleHudState.ts`'s
- * `SUBTITLE_SCALE_STEPS`.
+ * The CAPTION's size is user-adjustable from the dock (`subtitleScale` on the
+ * store, multiplied into `CAPTION_DESIGN`'s pixels here); the seek-feedback
+ * panel's is fixed. See `../captionScale.ts`.
  * - **Seek feedback**: while the timeline is being dragged
  *   (`seekPreviewS !== null`), the target `M:SS`/`H:MM:SS` plus - when the
  *   episode has segments - the chapter/segment title there
@@ -166,34 +203,39 @@ export function SubtitleHud({ store }: { store: PlayerStoreApi }) {
   if (!mounted) return null
 
   return (
-    // The documented way to resize a head-locked container: sphere-shell's
-    // README ("Rescaling", under HeadLocked HUD containers) says positioning is
-    // correct under an arbitrary parent transform, so a `<group scale>` around
-    // it is supported - and it is the RIGHT mechanism for text specifically,
-    // because uikit draws glyphs from an SDF atlas and so a uniform transform
-    // scale stays crisp, whereas driving `fontSize` would re-wrap the caption
-    // and leave padding/corner radius at a pixel size that no longer matches.
-    // See `SUBTITLE_SCALE_STEPS` in subtitleHudState.ts for why the factors are
-    // all well below 1.
-    <group scale={subtitleScale}>
-      <HeadLocked>
-        <Container flexDirection="column" alignItems="center" gap={10}>
-          {feedback != null && (
-            <HudPanel paddingX={16} paddingY={8} borderRadius={8}>
-              <Text fontSize={16} color="#ffffff">
-                {feedback.chapterTitle != null ? `${feedback.timeLabel} - ${feedback.chapterTitle}` : feedback.timeLabel}
-              </Text>
-            </HudPanel>
-          )}
-          {showCaption && cue != null && (
-            <HudPanel paddingX={20} paddingY={12} borderRadius={10} maxWidth={SUBTITLE_MAX_WIDTH_PX}>
-              {/* Real VTT cues carry their own embedded `\n` - see
-                  `transcriptState.ts`'s `normalizeCueText` doc comment. */}
-              <Text fontSize={22} color="#ffffff" textAlign="center">{normalizeCueText(cue.text)}</Text>
-            </HudPanel>
-          )}
-        </Container>
-      </HeadLocked>
-    </group>
+    <HeadLocked>
+      <Container flexDirection="column" alignItems="center" gap={10}>
+        {/* Fixed size on purpose - see FEEDBACK_SCALE's doc comment. */}
+        {feedback != null && (
+          <HudPanel
+            paddingX={FEEDBACK_DESIGN.paddingX}
+            paddingY={FEEDBACK_DESIGN.paddingY}
+            borderRadius={FEEDBACK_DESIGN.borderRadius}
+          >
+            <Text fontSize={FEEDBACK_DESIGN.fontSize} color="#ffffff">
+              {feedback.chapterTitle != null ? `${feedback.timeLabel} - ${feedback.chapterTitle}` : feedback.timeLabel}
+            </Text>
+          </HudPanel>
+        )}
+        {showCaption && cue != null && (
+          <HudPanel
+            paddingX={CAPTION_DESIGN.paddingX * subtitleScale}
+            paddingY={CAPTION_DESIGN.paddingY * subtitleScale}
+            borderRadius={CAPTION_DESIGN.borderRadius * subtitleScale}
+            maxWidth={CAPTION_DESIGN.maxWidth * subtitleScale}
+          >
+            {/* Real VTT cues carry their own embedded `\n` - see
+                `transcriptState.ts`'s `normalizeCueText` doc comment. */}
+            <Text
+              fontSize={CAPTION_DESIGN.fontSize * subtitleScale}
+              color="#ffffff"
+              textAlign="center"
+            >
+              {normalizeCueText(cue.text)}
+            </Text>
+          </HudPanel>
+        )}
+      </Container>
+    </HeadLocked>
   )
 }
