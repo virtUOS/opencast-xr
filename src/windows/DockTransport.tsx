@@ -82,6 +82,45 @@ const PLAY_BUTTON_PX = ROW_HEIGHT_PX + ROW_GAP_PX + CRUMB_ROW_HEIGHT_PX
 /** Fixed width for each time readout, so the timeline's own width does not twitch as the digits change. */
 const TIME_LABEL_WIDTH_PX = 46
 
+/**
+ * The width of this whole control block, in the dock's design pixels - and
+ * therefore, near enough, the width of the dock itself.
+ *
+ * ## Why the app names a number here
+ *
+ * sphere-shell's dock is content-sized: since it became two strips (tiles above,
+ * controls below - see `Dock.tsx`), the control strip holds nothing but this
+ * slot, a 2 px divider and two 30 px square buttons. So whatever width this
+ * container takes IS the dock's width, and „die Zeitleisten-Zeile spannt über
+ * die GESAMTE Dock-Breite" becomes a question the app has to answer: how wide
+ * should the dock be?
+ *
+ * Sizing to content instead - the previous round's approach - cannot answer it.
+ * The column would be exactly as wide as row 2's controls, so the timeline
+ * would only ever get what those left over, and the dock's width would twitch
+ * with the breadcrumb's text and with whether captions are on.
+ *
+ * ## Where 1100 comes from
+ *
+ * uikit's design pixels map to a fixed angular size in this dock:
+ * `Dock.tsx` derives `pixelSize` from ONE tile's angular width, so a design
+ * pixel is the same fraction of a degree at any shell radius. At the shipped
+ * radius this block plus the shell's own controls lands at about **65° of
+ * azimuth** - just under the 64°-wide video window it sits below, and well
+ * inside the ~±55° comfortable arc (the dock spans ±32.5°).
+ *
+ * ## Why it cannot be too small
+ *
+ * uikit's flex children do not shrink, so a width below row 2's own content
+ * would push that row out past the dock's background rather than compressing
+ * it. Row 2's worst case is bounded: both breadcrumb labels are truncated to
+ * `CRUMB_MAX_CHARS` (30) by `breadcrumbState.ts`, which puts the row at roughly
+ * 900 px with every control showing - about 130 px inside the 1032 px this
+ * leaves for the column. Raising `CRUMB_MAX_CHARS` or adding another control to
+ * row 2 is what would eat that margin.
+ */
+const SLOT_WIDTH_PX = 1100
+
 const BUTTON_BG = '#2c2c3a'
 const BUTTON_BG_HOVER = '#3a3a4a'
 const ACTIVE_BG = '#2f4f6f'
@@ -154,30 +193,46 @@ function IconButton({
  * controls used most are also the two largest and the two easiest to hit
  * without aiming precisely - a 60 px square and a track as wide as the dock.
  *
- * ## How the timeline gets „die gesamte Breite" without a magic number
+ * ## How the timeline gets „die gesamte Breite"
  *
- * No fixed width anywhere. The column of two rows sizes itself to its WIDEST
- * child, which is always row 2 (a breadcrumb plus a dozen buttons); row 1
- * stretches to that width because a flex column's default `alignItems` is
- * `stretch`; and the track alone carries `flexGrow={1}`, so it absorbs
- * everything row 1 does not spend on the two fixed-width time readouts.
+ * Three nested facts, and the first one is the library's:
  *
- * The alternative - a constant `SLOT_WIDTH_PX` - was rejected: row 2's real
- * width depends on the breadcrumb's truncated labels, whether the recording has
- * a series at all, and whether captions are on, so any constant is either too
- * small (row 2 overflows the strip, since uikit's flex children do not shrink
- * by default) or too large (a dock with dead space in it). Sizing to content in
- * one axis and growing into it in the other is exactly what flexbox is for, and
- * it re-solves itself when the caption buttons appear or disappear.
+ * 1. sphere-shell's dock is now TWO strips - the window tiles on their own row
+ *    above, the controls below - so this slot no longer shares its row with the
+ *    tiles, and the only other things beside it are a 2 px divider and two
+ *    30 px square buttons. Whatever width this container takes is, near enough,
+ *    the dock's width.
+ * 2. This container takes `SLOT_WIDTH_PX` (see that constant for where the
+ *    number comes from and why the app has to name one at all), and the column
+ *    of two rows takes all of it except the Play/Pause square, via `flexGrow`.
+ * 3. Inside that column, row 1 is as wide as the column - a flex column's
+ *    default `alignItems` is `stretch` - and the TRACK alone carries
+ *    `flexGrow={1}`, so it absorbs everything row 1 does not spend on the two
+ *    fixed-width time readouts.
  *
- * ## Two rows inside a one-row dock
+ * The previous round sized this block to its own CONTENT instead. That was the
+ * right answer while the tiles shared the row - a constant would have been
+ * fighting them for width, and losing more of it with every window the user put
+ * away - and the wrong one now: content-sizing means row 1 can only be as wide
+ * as row 2's controls happen to be, which measured at 60 % of the dock. The
+ * cost of naming a width is that uikit's flex children do not shrink; see
+ * `SLOT_WIDTH_PX` for the bound that keeps row 2 inside it.
  *
- * `Dock.tsx`'s strip is a `flexDirection="row"` uikit Container with
+ * What the track still does NOT cover is the Play/Pause square, the two time
+ * readouts and the shell's own two buttons - all of them controls rather than
+ * dead space. Covering those as well would mean the timeline being a full-bleed
+ * row of the DOCK in its own right, which contradicts „Nur der Play/Pause
+ * Button sollte beide Zeilen ueberspannen": a row 1 that spans the whole dock
+ * leaves nothing beside it for the button to span.
+ *
+ * ## Two rows inside the dock's control strip
+ *
+ * That strip is a `flexDirection="row"` uikit Container with
  * `alignItems="center"` and no fixed height, and the app's slot is one child of
- * that row. So a slot child that is itself a `flexDirection="column"` simply
- * becomes a taller row item and the dock grows to fit it - no sphere-shell
- * change needed, and the shell's own controls stay vertically centred beside
- * it. Verified live (screenshot + measured dock height) rather than assumed.
+ * it. So a slot child that is itself a `flexDirection="column"` simply becomes
+ * a taller row item and the dock grows to fit it - and the shell's own controls
+ * stay vertically centred beside it. Verified live (screenshot + measured dock
+ * height) rather than assumed.
  *
  * The shell's own three-dot menu and red exit X are NOT in row 2, even though
  * the user's sketch put them there: they belong to sphere-shell, which renders
@@ -662,7 +717,7 @@ export function DockTransport({
   const captionsActive = subtitlesOn && !subtitlesDisabled
 
   return (
-    <Container flexDirection="row" alignItems="center" gap={8}>
+    <Container flexDirection="row" alignItems="center" gap={8} width={SLOT_WIDTH_PX}>
       {/* Play/Pause, spanning both rows. Square and 60 px on a side - by far
           the largest target in the strip, because it is the one control a
           viewer reaches for without looking at the dock. */}
@@ -682,10 +737,12 @@ export function DockTransport({
         <PlayPauseIcon width={26} height={26} color="#ffffff" />
       </Container>
 
-      {/* No `alignItems` override on this column: a flex column stretches its
-          children by default, which is exactly what makes row 1 as wide as row
-          2 and therefore lets the timeline fill the dock. See the doc comment. */}
-      <Container flexDirection="column" gap={ROW_GAP_PX}>
+      {/* Takes everything the Play/Pause button does not, and no `alignItems`
+          override: a flex column stretches its children by default, so both
+          rows are as wide as this column - which is what puts the timeline
+          across the whole dock rather than across row 2's content. See the doc
+          comment. */}
+      <Container flexDirection="column" gap={ROW_GAP_PX} flexGrow={1}>
         {/* ROW 1: the timeline, and nothing else. The time readouts stay where
             they have always been - flanking the track - at the user's explicit
             request („Die Abspielposition und Dauer koennen da bleiben wo sie
