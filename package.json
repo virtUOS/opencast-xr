@@ -1,6 +1,8 @@
 {
   "name": "opencast-player",
   "private": true,
+  "license": "Apache-2.0",
+  "author": "Rüdiger Rolf <rrolf@uni-osnabrueck.de>",
   "type": "module",
   "scripts": {
     "dev": "vite --host --port 5190 --strictPort",

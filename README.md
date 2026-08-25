@@ -266,3 +266,8 @@ and the HUD only ever *displays*).
 | [`docs/superpowers/specs/2026-08-23-opencast-player-design.md`](../../docs/superpowers/specs/2026-08-23-opencast-player-design.md) | The design spec this was built from — error cases (§9) and the Definition of Done (§11) included. |
 | [`docs/UIKIT-NOTES.md`](../../docs/UIKIT-NOTES.md) | Real `@react-three/uikit` defects and their workarounds. |
 | [`packages/sphere-shell/README.md`](../../packages/sphere-shell/README.md) | The window-shell API this app is written against. |
+
+## License
+
+[Apache License 2.0](../../LICENSE). Copyright 2026 Universität Osnabrück,
+virtUOS. Author: Rüdiger Rolf. See [`NOTICE`](../../NOTICE) for attribution.
