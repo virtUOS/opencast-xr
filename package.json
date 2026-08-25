@@ -1,9 +1,15 @@
 {
-  "name": "opencast-player",
-  "private": true,
+  "name": "opencast-xr",
+  "version": "0.1.0",
+  "private": false,
   "license": "Apache-2.0",
   "author": "Rüdiger Rolf <rrolf@uni-osnabrueck.de>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/virtUOS/opencast-xr.git"
+  },
   "type": "module",
+  "packageManager": "pnpm@10.4.1",
   "scripts": {
     "dev": "vite --host --port 5190 --strictPort",
     "build": "vite build",
@@ -16,7 +22,7 @@
     "@react-three/xr": "^6.4.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "sphere-shell": "workspace:*",
+    "sphere-shell": "^0.3.0",
     "three": "^0.175.0",
     "zustand": "^5.0.0"
   },
