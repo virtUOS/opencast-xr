@@ -4,7 +4,7 @@ import { Container, Text, type VanillaContainer } from '@react-three/uikit'
 import { DECORATIVE_POINTER_EVENTS, Window } from 'sphere-shell'
 import type { PlayerStoreApi } from '../player/store'
 import { activeCueIndex, shouldAutoScroll, transcriptRows } from './transcriptState'
-import { PANEL_WINDOW_IDS } from './panelWindows'
+import { PANEL_WINDOW_IDS, panelWindowAvailable } from './panelWindows'
 import { useStartClosed } from './useStartClosed'
 
 // Same reserved-but-unused flank azimuth family as `videoWindowState.ts`'s
@@ -137,11 +137,13 @@ export function TranscriptWindow({ store }: { store: PlayerStoreApi }) {
     store.getState().engine.seek(cue.startMs / 1000)
   }
 
-  // Defensive only: App.tsx is expected to mount this only once
-  // `cues.length > 0`, mirroring `ChaptersWindow`'s own self-gate - but this
-  // component checks its own precondition too rather than trusting the
-  // caller silently.
-  if (cues.length === 0) return null
+  // No cues, no window - and expressed through the SHARED predicate rather than
+  // a local `cues.length === 0`, because the dock's „Transkript" button has to
+  // gate on exactly the same fact. Two copies of it drifted apart once already:
+  // the button shipped live for uncaptioned recordings while this window was
+  // never registered, so pressing it did nothing at all (code review). See
+  // `panelWindowAvailable`.
+  if (!panelWindowAvailable(PANEL_WINDOW_IDS.transcript, { cueCount: cues.length })) return null
 
   return (
     <Window

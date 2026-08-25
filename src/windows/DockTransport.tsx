@@ -26,7 +26,12 @@ import {
 import { DECORATIVE_POINTER_EVENTS, HoverLabel, useShellStore, useWindowState } from 'sphere-shell'
 import type { PlayerStoreApi } from '../player/store'
 import type { SeriesStateApi } from './seriesState'
-import { PANEL_WINDOW_IDS, panelToggleAction, type PanelWindowId } from './panelWindows'
+import {
+  PANEL_WINDOW_IDS,
+  panelToggleAction,
+  panelWindowAvailable,
+  type PanelWindowId,
+} from './panelWindows'
 import {
   derivePlaybackVisualState,
   fractionToSeconds,
@@ -237,32 +242,32 @@ function IconButton({
 }) {
   return (
     <HoverLabel label={label} controlHeight={size} align={labelAlign}>
-    <Container
-      width={size}
-      height={size}
-      alignItems="center"
-      justifyContent="center"
-      backgroundColor={background}
-      borderRadius={6}
-      hover={{ backgroundColor: disabled ? background : hoverBackground }}
-      onClick={(e) => {
-        e.stopPropagation()
-        if (disabled) return
-        onPress()
-      }}
-    >
-      {/* See the doc comment: the icon must not be a hit target of its own.
-          `alignItems`/`justifyContent` are inherited from nothing - this layer
-          has to centre its own child, since it is now the box between the
-          button and the icon. */}
       <Container
+        width={size}
+        height={size}
         alignItems="center"
         justifyContent="center"
-        pointerEvents={DECORATIVE_POINTER_EVENTS}
+        backgroundColor={background}
+        borderRadius={6}
+        hover={{ backgroundColor: disabled ? background : hoverBackground }}
+        onClick={(e) => {
+          e.stopPropagation()
+          if (disabled) return
+          onPress()
+        }}
       >
-        {children}
+        {/* See the doc comment: the icon must not be a hit target of its own.
+            `alignItems`/`justifyContent` are inherited from nothing - this layer
+            has to centre its own child, since it is now the box between the
+            button and the icon. */}
+        <Container
+          alignItems="center"
+          justifyContent="center"
+          pointerEvents={DECORATIVE_POINTER_EVENTS}
+        >
+          {children}
+        </Container>
       </Container>
-    </Container>
     </HoverLabel>
   )
 }
@@ -808,6 +813,14 @@ export function DockTransport({
   const infoOpen = infoWindow != null && !infoWindow.closed && !infoWindow.minimized
   const transcriptOpen =
     transcriptWindow != null && !transcriptWindow.closed && !transcriptWindow.minimized
+  // Whether there is a Transkript window to toggle AT ALL - the same predicate
+  // `TranscriptWindow` gates its own existence on, so the button cannot outlive
+  // its window. See `panelWindowAvailable`.
+  const transcriptAvailable = panelWindowAvailable(PANEL_WINDOW_IDS.transcript, {
+    segmentCount: episode.segments?.length ?? 0,
+    cueCount: cuesCount,
+    hasSeries: episode.seriesId != null,
+  })
 
   const captionsActive = subtitlesOn && !subtitlesDisabled
 
@@ -820,29 +833,29 @@ export function DockTransport({
         label={playing ? LABEL.pause : LABEL.play}
         controlHeight={PLAY_BUTTON_PX}
       >
-      <Container
-        height={PLAY_BUTTON_PX}
-        width={PLAY_BUTTON_PX}
-        alignItems="center"
-        justifyContent="center"
-        backgroundColor="#2f6f4f"
-        borderRadius={8}
-        hover={{ backgroundColor: '#3f9f6f' }}
-        onClick={(e) => {
-          e.stopPropagation()
-          togglePlay()
-        }}
-      >
-        {/* Hit-transparent like every other icon in the strip (see
-            `IconButton`'s doc comment). This button is the biggest target in
-            the app and still needs it: a 26 px icon inside a 60 px square is
-            most of what the ray actually lands on, and press-on-glyph +
-            release-on-panel is not a click. */}
-        <PlayPauseIcon
-          width={26} height={26} color="#ffffff"
-          pointerEvents={DECORATIVE_POINTER_EVENTS}
-        />
-      </Container>
+        <Container
+          height={PLAY_BUTTON_PX}
+          width={PLAY_BUTTON_PX}
+          alignItems="center"
+          justifyContent="center"
+          backgroundColor="#2f6f4f"
+          borderRadius={8}
+          hover={{ backgroundColor: '#3f9f6f' }}
+          onClick={(e) => {
+            e.stopPropagation()
+            togglePlay()
+          }}
+        >
+          {/* Hit-transparent like every other icon in the strip (see
+              `IconButton`'s doc comment). This button is the biggest target in
+              the app and still needs it: a 26 px icon inside a 60 px square is
+              most of what the ray actually lands on, and press-on-glyph +
+              release-on-panel is not a click. */}
+          <PlayPauseIcon
+            width={26} height={26} color="#ffffff"
+            pointerEvents={DECORATIVE_POINTER_EVENTS}
+          />
+        </Container>
       </HoverLabel>
 
       {/* Takes everything the Play/Pause button does not, and no `alignItems`
@@ -1117,15 +1130,27 @@ export function DockTransport({
               what a transcript is, and legible at 13 px against its neighbours
               in a way `FileText` (a document, i.e. "a file") is not. It sits
               before Info because it is the one a viewer opens WHILE watching. */}
+          {/* Greyed and inert for a recording with no captions, exactly like the
+              CC button beside it. `TranscriptWindow` never registers a window
+              without cues (`panelWindowAvailable`), so a live-looking button
+              here would be a permanent silent no-op - worse than no button,
+              because before it existed an uncaptioned recording made no promise
+              at all. Found by code review; the gate now comes from the same
+              predicate the window itself gates on. */}
           <IconButton
             size={CRUMB_ROW_HEIGHT_PX}
             background={transcriptOpen ? ACTIVE_BG : BUTTON_BG}
             hoverBackground={transcriptOpen ? ACTIVE_BG_HOVER : BUTTON_BG_HOVER}
+            disabled={!transcriptAvailable}
             label={LABEL.transcript}
             labelAlign="right"
             onPress={() => togglePanel(PANEL_WINDOW_IDS.transcript, transcriptWindow)}
           >
-            <ScrollText width={SMALL_ICON_PX} height={SMALL_ICON_PX} color="#ffffff" />
+            <ScrollText
+              width={SMALL_ICON_PX}
+              height={SMALL_ICON_PX}
+              color={transcriptAvailable ? '#ffffff' : DISABLED_COLOR}
+            />
           </IconButton>
           <IconButton
             size={CRUMB_ROW_HEIGHT_PX}

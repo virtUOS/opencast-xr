@@ -23,9 +23,10 @@
  * registered-but-hidden window each (`<Window>` renders nothing when closed)
  * and buys the whole existing restore path for free.
  *
- * The two panels that also carry their own data gate (Kapitel needs segments,
- * Reihe needs a series) are unaffected: they register nothing when they have
- * nothing to show, so there is nothing to close and no tile - which is right.
+ * The three panels that also carry their own DATA gate (Kapitel needs segments,
+ * Transkript needs cues, Reihe needs a series - see `panelWindowAvailable`) are
+ * unaffected: they register nothing when they have nothing to show, so there is
+ * nothing to close and no tile - which is right.
  *
  * ## ...and which of them actually GET a tile
  *
@@ -94,4 +95,59 @@ export function panelToggleAction(
 ): PanelToggleAction {
   if (shell === undefined) return 'restore'
   return shell.closed || shell.minimized ? 'restore' : 'close'
+}
+
+/** What the open recording offers, as far as the panel windows care. */
+export interface PanelData {
+  /** `episode.segments.length` - the OCR chapter marks. */
+  segmentCount: number
+  /** `cues.length` - the parsed caption cues. */
+  cueCount: number
+  /** `episode.seriesId != null`. */
+  hasSeries: boolean
+}
+
+/**
+ * Whether a panel window EXISTS for the open recording at all.
+ *
+ * ## Why this is one shared predicate and not a check per component
+ *
+ * Three of the four panels are gated on the recording's own data, and each one
+ * used to spell its gate out where it happened to be needed. That is exactly how
+ * the code review found a dead control: the dock's new „Transkript" button
+ * rendered fully live for a recording with no captions, while `TranscriptWindow`
+ * - holding the same rule in its own `return null` - had never registered the
+ * window. Pressing the button then did nothing at all, silently, forever, which
+ * is worse than the button not being there: before it existed, an uncaptioned
+ * recording showed no affordance and told no lie.
+ *
+ * The gate and its consumers now read from one place, so a button cannot outlive
+ * its window again. `Info` is deliberately in the table too, answering `true`
+ * unconditionally: player mode always has an episode (see `store.ts`'s
+ * `openEpisode`, which sets `mode` and `episode` in the same `set()`), and
+ * stating that here is what keeps "which panels can be gated off" a complete,
+ * reviewable list rather than three scattered conditions plus an assumption.
+ *
+ * Counts are compared with `> 0`, so a `NaN` or a negative from a malformed
+ * payload reads as "not available" rather than as "available" - the safe
+ * direction, since the window's own render would then have nothing to show.
+ *
+ * `data` is PARTIAL so that a caller can answer only the question it is asking:
+ * the dock has the whole open recording in hand and passes all three fields,
+ * while a window checking its own precondition has just its own (a component
+ * inventing `hasSeries: false` to ask about cues would be noise, and the next
+ * reader would have to work out that it does not matter). A field left out
+ * counts as absent, i.e. "not available" - the same safe direction.
+ */
+export function panelWindowAvailable(id: PanelWindowId, data: Partial<PanelData>): boolean {
+  switch (id) {
+    case PANEL_WINDOW_IDS.chapters:
+      return (data.segmentCount ?? 0) > 0
+    case PANEL_WINDOW_IDS.transcript:
+      return (data.cueCount ?? 0) > 0
+    case PANEL_WINDOW_IDS.series:
+      return data.hasSeries === true
+    case PANEL_WINDOW_IDS.info:
+      return true
+  }
 }

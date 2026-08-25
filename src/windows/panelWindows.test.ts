@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { PANEL_WINDOW_IDS, panelToggleAction } from './panelWindows'
+import { PANEL_WINDOW_IDS, panelToggleAction, panelWindowAvailable } from './panelWindows'
 
 describe('PANEL_WINDOW_IDS', () => {
   it('names the four panel windows', () => {
@@ -53,5 +53,50 @@ describe('panelToggleAction', () => {
     const closed = { closed: true, minimized: false }
     expect(panelToggleAction(open)).toBe('close')
     expect(panelToggleAction(closed)).toBe('restore')
+  })
+})
+
+describe('panelWindowAvailable', () => {
+  const nothing = { segmentCount: 0, cueCount: 0, hasSeries: false }
+
+  it('gates Kapitel on segments, Transkript on cues, Reihe on a series', () => {
+    expect(panelWindowAvailable(PANEL_WINDOW_IDS.chapters, { ...nothing, segmentCount: 3 })).toBe(true)
+    expect(panelWindowAvailable(PANEL_WINDOW_IDS.transcript, { ...nothing, cueCount: 29 })).toBe(true)
+    expect(panelWindowAvailable(PANEL_WINDOW_IDS.series, { ...nothing, hasSeries: true })).toBe(true)
+  })
+
+  it('REGRESSION: a recording with no captions has no Transkript window', () => {
+    // The code review's finding, as a test. The dock's „Transkript" button was
+    // rendered live for every recording, while `TranscriptWindow` never
+    // registered one without cues - so pressing it was a silent, permanent
+    // no-op. `develop.opencast.org` serves plenty of uncaptioned recordings, so
+    // this is the common case, not an edge one.
+    expect(panelWindowAvailable(PANEL_WINDOW_IDS.transcript, nothing)).toBe(false)
+    expect(panelWindowAvailable(PANEL_WINDOW_IDS.chapters, nothing)).toBe(false)
+    expect(panelWindowAvailable(PANEL_WINDOW_IDS.series, nothing)).toBe(false)
+  })
+
+  it('never gates Info off - player mode always has an episode', () => {
+    expect(panelWindowAvailable(PANEL_WINDOW_IDS.info, nothing)).toBe(true)
+    expect(panelWindowAvailable(PANEL_WINDOW_IDS.info, { segmentCount: 9, cueCount: 9, hasSeries: true })).toBe(true)
+  })
+
+  it('reads a malformed count as NOT available, not as available', () => {
+    // A negative or NaN count can only come from a malformed payload, and the
+    // window's own render would have nothing to show either way. `> 0` fails
+    // closed for both, which is the safe direction.
+    for (const bad of [Number.NaN, -1, Number.NEGATIVE_INFINITY]) {
+      expect(panelWindowAvailable(PANEL_WINDOW_IDS.transcript, { ...nothing, cueCount: bad })).toBe(false)
+      expect(panelWindowAvailable(PANEL_WINDOW_IDS.chapters, { ...nothing, segmentCount: bad })).toBe(false)
+    }
+  })
+
+  it('answers for every panel id, so a new panel cannot be forgotten', () => {
+    // The switch is exhaustive over PanelWindowId (TypeScript checks that), and
+    // this pins that every id gets a real boolean rather than undefined leaking
+    // out of a missing branch.
+    for (const id of Object.values(PANEL_WINDOW_IDS)) {
+      expect(typeof panelWindowAvailable(id, nothing)).toBe('boolean')
+    }
   })
 })
