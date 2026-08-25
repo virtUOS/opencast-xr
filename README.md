@@ -38,6 +38,10 @@ unavailable. For a headset, see
 which covers the LAN and `adb reverse` routes and the whole acceptance
 checklist.
 
+For a production deployment as a static site (nginx, TLS, SELinux, firewalld,
+on Rocky Linux 10), see
+[`docs/INSTALL-rocky-linux-10.md`](../../docs/INSTALL-rocky-linux-10.md).
+
 ## Controls
 
 Everything you operate while watching is in the **dock**, the strip below the
@@ -266,6 +270,7 @@ and the HUD only ever *displays*).
 | [`docs/superpowers/specs/2026-08-23-opencast-player-design.md`](../../docs/superpowers/specs/2026-08-23-opencast-player-design.md) | The design spec this was built from — error cases (§9) and the Definition of Done (§11) included. |
 | [`docs/UIKIT-NOTES.md`](../../docs/UIKIT-NOTES.md) | Real `@react-three/uikit` defects and their workarounds. |
 | [`packages/sphere-shell/README.md`](../../packages/sphere-shell/README.md) | The window-shell API this app is written against. |
+| [`docs/INSTALL-rocky-linux-10.md`](../../docs/INSTALL-rocky-linux-10.md) | Production deployment as a static site on Rocky Linux 10 (nginx, TLS, SELinux, firewalld) — German, for university admins. |
 
 ## License
 
