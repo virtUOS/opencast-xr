@@ -22,7 +22,7 @@ import {
   Volume2,
   VolumeX,
 } from '@react-three/uikit-lucide'
-import { useShellStore, useWindowState } from 'sphere-shell'
+import { DECORATIVE_POINTER_EVENTS, useShellStore, useWindowState } from 'sphere-shell'
 import type { PlayerStoreApi } from '../player/store'
 import type { SeriesStateApi } from './seriesState'
 import { PANEL_WINDOW_IDS, panelToggleAction, type PanelWindowId } from './panelWindows'
@@ -139,6 +139,26 @@ const CRUMB_CURRENT_COLOR = '#9a9aa5'
  * entry 1 and `ControlsWindow.tsx`'s history. Encoding "no hover" as a hover
  * colour equal to the resting colour is the fix, and having it in one helper
  * is how it stays applied.
+ *
+ * ## The icon is wrapped in a hit-transparent layer, and that is load-bearing
+ *
+ * These are the smallest targets in the app - 24 px squares holding a 13 px
+ * lucide icon - and the icon is its own `Object3D` (one per SVG subpath, in
+ * fact). `@pmndrs/pointer-events` emits a `click` only when pointerdown and
+ * pointerup resolve to the EXACT same object, with no movement tolerance
+ * whatsoever, while `hover` is emitted on the hit object and all its ancestors.
+ * So a press landing on the glyph and a release landing on the ~5 px of button
+ * around it is not a click - and the button was lit the whole time. That is a
+ * precise match for the user's „Im VR lösen die Buttons nicht immer aus ...
+ * auch wenn sie durch das Zielen mit dem Controller schon gehighlighted sind".
+ *
+ * Wrapping the children in a `pointerEvents="none"` layer (inherited, so it
+ * covers whatever the caller passed and every mesh inside it) collapses the
+ * button back to one hit object. Done here rather than at each of the fifteen
+ * call sites for the same reason the `hover` object is: one helper is how it
+ * stays applied. See sphere-shell's `DECORATIVE_POINTER_EVENTS` for the quoted
+ * upstream code, and `XR_CLICK_THRESHOLD_MS` for the other, larger half of the
+ * same report.
  */
 function IconButton({
   size = ROW_HEIGHT_PX,
@@ -170,7 +190,17 @@ function IconButton({
         onPress()
       }}
     >
-      {children}
+      {/* See the doc comment: the icon must not be a hit target of its own.
+          `alignItems`/`justifyContent` are inherited from nothing - this layer
+          has to centre its own child, since it is now the box between the
+          button and the icon. */}
+      <Container
+        alignItems="center"
+        justifyContent="center"
+        pointerEvents={DECORATIVE_POINTER_EVENTS}
+      >
+        {children}
+      </Container>
     </Container>
   )
 }
@@ -734,7 +764,15 @@ export function DockTransport({
           togglePlay()
         }}
       >
-        <PlayPauseIcon width={26} height={26} color="#ffffff" />
+        {/* Hit-transparent like every other icon in the strip (see
+            `IconButton`'s doc comment). This button is the biggest target in
+            the app and still needs it: a 26 px icon inside a 60 px square is
+            most of what the ray actually lands on, and press-on-glyph +
+            release-on-panel is not a click. */}
+        <PlayPauseIcon
+          width={26} height={26} color="#ffffff"
+          pointerEvents={DECORATIVE_POINTER_EVENTS}
+        />
       </Container>
 
       {/* Takes everything the Play/Pause button does not, and no `alignItems`
@@ -818,10 +856,19 @@ export function DockTransport({
                     onCrumb(crumb)
                   }}
                 >
-                  {crumb.kind === 'home' && <House width={11} height={11} color={CRUMB_COLOR} />}
+                  {/* All three children hit-transparent: a crumb is one
+                      button, and its label covers nearly all of it. See
+                      `IconButton`'s doc comment. */}
+                  {crumb.kind === 'home' && (
+                    <House
+                      width={11} height={11} color={CRUMB_COLOR}
+                      pointerEvents={DECORATIVE_POINTER_EVENTS}
+                    />
+                  )}
                   <Text
                     fontSize={11}
                     color={crumb.kind === 'current' ? CRUMB_CURRENT_COLOR : CRUMB_COLOR}
+                    pointerEvents={DECORATIVE_POINTER_EVENTS}
                   >
                     {crumb.label}
                   </Text>
@@ -830,7 +877,12 @@ export function DockTransport({
                       because what it opens IS the list of the other episodes -
                       and it is drawn in the brighter crumb colour, so the
                       affordance reads even where the greyed label does not. */}
-                  {opensSeries && <List width={11} height={11} color={CRUMB_COLOR} />}
+                  {opensSeries && (
+                    <List
+                      width={11} height={11} color={CRUMB_COLOR}
+                      pointerEvents={DECORATIVE_POINTER_EVENTS}
+                    />
+                  )}
                 </Container>
               </Container>
             )

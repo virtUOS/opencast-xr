@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useState } from 'react'
 import { useStore } from 'zustand'
 import { Container, Text } from '@react-three/uikit'
-import { Window } from 'sphere-shell'
+import { DECORATIVE_POINTER_EVENTS, Window } from 'sphere-shell'
 import type { PlayerStoreApi } from '../player/store'
 import { MediaList } from './MediaList'
 import { toEpisodeTile } from './libraryState'
@@ -32,7 +32,10 @@ function ErrorPanel({ message, onRetry }: { message: string; onRetry: () => void
           onRetry()
         }}
       >
-        <Text fontSize={12} color="#ffd8de">{RETRY_LABEL}</Text>
+        {/* Hit-transparent - see sphere-shell's DECORATIVE_POINTER_EVENTS. */}
+        <Text fontSize={12} color="#ffd8de" pointerEvents={DECORATIVE_POINTER_EVENTS}>
+          {RETRY_LABEL}
+        </Text>
       </Container>
     </Container>
   )
@@ -128,7 +131,9 @@ export function SeriesWindow({
                 selectEpisode(openError.id)
               }}
             >
-              <Text fontSize={12} color="#ffd8de">{RETRY_LABEL}</Text>
+              <Text fontSize={12} color="#ffd8de" pointerEvents={DECORATIVE_POINTER_EVENTS}>
+                {RETRY_LABEL}
+              </Text>
             </Container>
           </Container>
         )}

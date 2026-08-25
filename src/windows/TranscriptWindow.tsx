@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef } from 'react'
 import { useStore } from 'zustand'
 import { Container, Text, type VanillaContainer } from '@react-three/uikit'
-import { Window } from 'sphere-shell'
+import { DECORATIVE_POINTER_EVENTS, Window } from 'sphere-shell'
 import type { PlayerStoreApi } from '../player/store'
 import { activeCueIndex, shouldAutoScroll, transcriptRows } from './transcriptState'
 import { PANEL_WINDOW_IDS } from './panelWindows'
@@ -182,7 +182,18 @@ export function TranscriptWindow({ store }: { store: PlayerStoreApi }) {
                   seekToCue(row.cueIndex)
                 }}
               >
-                <Text fontSize={13} color={active ? '#ffffff' : '#c9c9d2'}>{row.text}</Text>
+                {/* Hit-transparent, so the ROW is one hit object. The text
+                    fills the row, so without this nearly every press lands on
+                    the text and the click survives only if the release lands on
+                    exactly the same text object - see sphere-shell's
+                    DECORATIVE_POINTER_EVENTS. */}
+                <Text
+                  fontSize={13}
+                  color={active ? '#ffffff' : '#c9c9d2'}
+                  pointerEvents={DECORATIVE_POINTER_EVENTS}
+                >
+                  {row.text}
+                </Text>
               </Container>
             )
           })

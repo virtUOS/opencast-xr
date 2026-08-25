@@ -1,7 +1,13 @@
 import { useEffect, useMemo, useRef } from 'react'
 import { useStore } from 'zustand'
 import { Container, Text } from '@react-three/uikit'
-import { VideoSurface, Window, useShellStore, useWindowState } from 'sphere-shell'
+import {
+  DECORATIVE_POINTER_EVENTS,
+  VideoSurface,
+  Window,
+  useShellStore,
+  useWindowState,
+} from 'sphere-shell'
 import type { PlayerStoreApi } from '../player/store'
 import { describeMediaError } from '../player/mediaElements'
 import {
@@ -184,7 +190,11 @@ function StreamErrorTile({
           onReload()
         }}
       >
-        <Text fontSize={12} color={ERROR_TEXT}>{RELOAD_LABEL}</Text>
+        {/* Hit-transparent - see sphere-shell's DECORATIVE_POINTER_EVENTS.
+            This one matters: it is the only way out of a failed stream. */}
+        <Text fontSize={12} color={ERROR_TEXT} pointerEvents={DECORATIVE_POINTER_EVENTS}>
+          {RELOAD_LABEL}
+        </Text>
       </Container>
       {hint != null && <Text fontSize={10} color={ERROR_HINT_TEXT}>{hint}</Text>}
     </Container>

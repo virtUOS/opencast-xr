@@ -1,4 +1,5 @@
 import { Container, Text, Image } from '@react-three/uikit'
+import { DECORATIVE_POINTER_EVENTS } from 'sphere-shell'
 
 export interface MediaListItem {
   id: string
@@ -101,12 +102,33 @@ export function MediaList({ items, onSelect, onMore, moreLabel, emptyText, activ
               onSelect(item.id)
             }}
           >
+            {/* Every child of a tile opts OUT of hit-testing, so the tile is
+                ONE hit object. This matters more here than anywhere else in
+                the app: the thumbnail and the text column between them cover
+                essentially the whole tile, so nearly every press lands on a
+                child rather than on the tile - and @pmndrs/pointer-events only
+                emits a `click` when press and release resolve to the exact same
+                Object3D, with no movement tolerance at all. Press on the title,
+                release on the thumbnail, and the tile stays highlighted (hover
+                is emitted on ancestors too) while the click is silently
+                discarded. See sphere-shell's DECORATIVE_POINTER_EVENTS for the
+                quoted upstream code. `pointerEvents` is inherited in uikit, so
+                the value on the column covers both `Text`s under it. */}
             {item.imageUrl ? (
-              <Image src={item.imageUrl} width={TILE_IMAGE_W} height={TILE_IMAGE_H} borderRadius={4} />
+              <Image
+                src={item.imageUrl} width={TILE_IMAGE_W} height={TILE_IMAGE_H} borderRadius={4}
+                pointerEvents={DECORATIVE_POINTER_EVENTS}
+              />
             ) : (
-              <Container width={TILE_IMAGE_W} height={TILE_IMAGE_H} backgroundColor="#101014" borderRadius={4} />
+              <Container
+                width={TILE_IMAGE_W} height={TILE_IMAGE_H} backgroundColor="#101014" borderRadius={4}
+                pointerEvents={DECORATIVE_POINTER_EVENTS}
+              />
             )}
-            <Container flexDirection="column" gap={2} flexGrow={1}>
+            <Container
+              flexDirection="column" gap={2} flexGrow={1}
+              pointerEvents={DECORATIVE_POINTER_EVENTS}
+            >
               <Text fontSize={14} color="#ffffff">{truncate(item.title, TITLE_MAX_CHARS)}</Text>
               {item.subtitle != null && (
                 <Text fontSize={11} color="#9a9aa5">{truncate(item.subtitle, SUBTITLE_MAX_CHARS)}</Text>
@@ -129,7 +151,9 @@ export function MediaList({ items, onSelect, onMore, moreLabel, emptyText, activ
             onMore()
           }}
         >
-          <Text fontSize={13} color="#ffffff">{moreLabel ?? 'Mehr laden'}</Text>
+          <Text fontSize={13} color="#ffffff" pointerEvents={DECORATIVE_POINTER_EVENTS}>
+            {moreLabel ?? 'Mehr laden'}
+          </Text>
         </Container>
       )}
     </Container>

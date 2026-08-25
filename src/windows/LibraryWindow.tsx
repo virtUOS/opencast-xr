@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useStore } from 'zustand'
 import { Container, Text } from '@react-three/uikit'
-import { Window } from 'sphere-shell'
+import { DECORATIVE_POINTER_EVENTS, Window } from 'sphere-shell'
 import type { PlayerStoreApi } from '../player/store'
 import { MediaList } from './MediaList'
 import {
@@ -33,7 +33,12 @@ function ErrorPanel({ message, onRetry }: { message: string; onRetry: () => void
           onRetry()
         }}
       >
-        <Text fontSize={12} color="#ffd8de">{RETRY_LABEL}</Text>
+        {/* The label covers nearly the whole button, and a press and release
+            that resolve to two different objects is not a click - see
+            sphere-shell's DECORATIVE_POINTER_EVENTS. */}
+        <Text fontSize={12} color="#ffd8de" pointerEvents={DECORATIVE_POINTER_EVENTS}>
+          {RETRY_LABEL}
+        </Text>
       </Container>
     </Container>
   )
@@ -163,7 +168,9 @@ export function LibraryWindow({ store }: { store: PlayerStoreApi }) {
                   libraryStore.getState().back()
                 }}
               >
-                <Text fontSize={13} color="#cfd8ff">{BACK_LABEL}</Text>
+                <Text fontSize={13} color="#cfd8ff" pointerEvents={DECORATIVE_POINTER_EVENTS}>
+                  {BACK_LABEL}
+                </Text>
               </Container>
               {/* Which scope this level-2 list actually is. `EpisodeScope.title`
                   had been carried since Task 11 without ever being rendered,
@@ -190,7 +197,9 @@ export function LibraryWindow({ store }: { store: PlayerStoreApi }) {
                     selectEpisode(openError.id)
                   }}
                 >
-                  <Text fontSize={12} color="#ffd8de">{RETRY_LABEL}</Text>
+                  <Text fontSize={12} color="#ffd8de" pointerEvents={DECORATIVE_POINTER_EVENTS}>
+                    {RETRY_LABEL}
+                  </Text>
                 </Container>
               </Container>
             )}
