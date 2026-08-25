@@ -149,6 +149,13 @@ export function TranscriptWindow({ store }: { store: PlayerStoreApi }) {
       title="Transkript"
       size={WINDOW_SIZE}
       position={{ azimuth: TRANSCRIPT_AZIMUTH_DEG, elevation: TRANSCRIPT_ELEVATION_DEG }}
+      // No dock tile: the dock's own „Transkript" button opens and closes this
+      // window - „Fuer das Transcription Fenster bitte auch noch einen Button
+      // ins Dock, statt des Fenster Platzhalters". That button honours
+      // `dockTile`'s contract (see the prop's doc comment): it restores from
+      // CLOSED as well as from minimized, because it goes through the shell's
+      // `restore`, which clears both flags.
+      dockTile={false}
     >
       <Container
         ref={scrollRef}

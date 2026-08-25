@@ -17,12 +17,13 @@ import {
   Pause,
   Play,
   Plus,
+  ScrollText,
   SkipBack,
   SkipForward,
   Volume2,
   VolumeX,
 } from '@react-three/uikit-lucide'
-import { DECORATIVE_POINTER_EVENTS, useShellStore, useWindowState } from 'sphere-shell'
+import { DECORATIVE_POINTER_EVENTS, HoverLabel, useShellStore, useWindowState } from 'sphere-shell'
 import type { PlayerStoreApi } from '../player/store'
 import type { SeriesStateApi } from './seriesState'
 import { PANEL_WINDOW_IDS, panelToggleAction, type PanelWindowId } from './panelWindows'
@@ -130,6 +131,45 @@ const CRUMB_COLOR = '#cfd8ff'
 const CRUMB_CURRENT_COLOR = '#9a9aa5'
 
 /**
+ * What each icon-only control's hover label says („Sind Tooltipps möglich wenn
+ * man auf die Buttons zeigt?" - yes, this is them).
+ *
+ * Collected here rather than inlined at fifteen call sites: they are the only
+ * user-facing copy in this file that is not derived from data, so having them in
+ * one block is what makes them reviewable as a set - consistent voice, no two
+ * buttons claiming the same thing, and every one of them checkable against the
+ * uikit font's own limits in a single glance.
+ *
+ * Umlauts are deliberate and safe: this uikit version renders accented Latin
+ * letters (Task 11 verified it live against the real server); what it cannot
+ * draw is typographic PUNCTUATION - no ellipsis, no en dash, no middle dot. See
+ * `docs/UIKIT-NOTES.md` entry 3.
+ *
+ * A label names the ACTION where pressing does something ("Stumm", "Weiter"),
+ * and the STATE it will move to where the control is a toggle ("Ton an" while
+ * muted) - the same rule the shell's own Curved/Flat button follows, and the
+ * only one that answers "what happens if I press this".
+ */
+const LABEL = {
+  play: 'Wiedergabe',
+  pause: 'Pause',
+  previousEpisode: 'Vorherige Aufzeichnung',
+  nextEpisode: 'Nächste Aufzeichnung',
+  captionsOn: 'Untertitel an',
+  captionsOff: 'Untertitel aus',
+  captionSmaller: 'Schrift kleiner',
+  captionLarger: 'Schrift größer',
+  captionUp: 'Schrift höher',
+  captionDown: 'Schrift tiefer',
+  mute: 'Stumm',
+  unmute: 'Ton an',
+  volumeDown: 'Leiser',
+  volumeUp: 'Lauter',
+  transcript: 'Transkript',
+  info: 'Infos',
+} as const
+
+/**
  * A square icon button in the dock's own idiom. Exists because this component
  * now renders eight of them and the disabled variant has a real trap in it:
  * `hover` must stay a plain object on every render, never
@@ -159,12 +199,28 @@ const CRUMB_CURRENT_COLOR = '#9a9aa5'
  * stays applied. See sphere-shell's `DECORATIVE_POINTER_EVENTS` for the quoted
  * upstream code, and `XR_CLICK_THRESHOLD_MS` for the other, larger half of the
  * same report.
+ *
+ * ## Every one of them carries a hover label, and `label` is REQUIRED
+ *
+ * „Sind Tooltipps möglich wenn man auf die Buttons zeigt?" - yes, via
+ * sphere-shell's `<HoverLabel>`, and this is where they go: a button in this row
+ * is a 24 px square holding a 13 px glyph, read at arm's length through a lens,
+ * so the icon alone is a guess for anything but Play/Pause. The prop is
+ * mandatory rather than optional so that adding a control to this row cannot
+ * quietly ship without one - the compiler asks.
+ *
+ * `labelAlign` exists for the same reason `HoverLabel` has it: a label grows
+ * rightward from its button by default, which is wrong for the buttons at the
+ * right-hand end of the row, where it would hang off the dock. See the call
+ * sites.
  */
 function IconButton({
   size = ROW_HEIGHT_PX,
   background = BUTTON_BG,
   hoverBackground = BUTTON_BG_HOVER,
   disabled = false,
+  label,
+  labelAlign = 'left',
   onPress,
   children,
 }: {
@@ -172,10 +228,15 @@ function IconButton({
   background?: string
   hoverBackground?: string
   disabled?: boolean
+  /** What the hover label says. German, plain ASCII-safe text - see the doc comment. */
+  label: string
+  /** `'right'` for a button near the end of the row, so its label grows inward. */
+  labelAlign?: 'left' | 'right'
   onPress: () => void
   children: ReactNode
 }) {
   return (
+    <HoverLabel label={label} controlHeight={size} align={labelAlign}>
     <Container
       width={size}
       height={size}
@@ -202,6 +263,7 @@ function IconButton({
         {children}
       </Container>
     </Container>
+    </HoverLabel>
   )
 }
 
@@ -626,6 +688,7 @@ export function DockTransport({
   const shellStore = useShellStore()
   const seriesWindow = useWindowState(PANEL_WINDOW_IDS.series)
   const infoWindow = useWindowState(PANEL_WINDOW_IDS.info)
+  const transcriptWindow = useWindowState(PANEL_WINDOW_IDS.transcript)
 
   const togglePanel = useCallback(
     (id: PanelWindowId, entry: { closed: boolean; minimized: boolean } | undefined) => {
@@ -743,6 +806,8 @@ export function DockTransport({
   // the button must bring it back rather than close it again (panelToggleAction
   // decides that; this only decides how the button LOOKS).
   const infoOpen = infoWindow != null && !infoWindow.closed && !infoWindow.minimized
+  const transcriptOpen =
+    transcriptWindow != null && !transcriptWindow.closed && !transcriptWindow.minimized
 
   const captionsActive = subtitlesOn && !subtitlesDisabled
 
@@ -751,6 +816,10 @@ export function DockTransport({
       {/* Play/Pause, spanning both rows. Square and 60 px on a side - by far
           the largest target in the strip, because it is the one control a
           viewer reaches for without looking at the dock. */}
+      <HoverLabel
+        label={playing ? LABEL.pause : LABEL.play}
+        controlHeight={PLAY_BUTTON_PX}
+      >
       <Container
         height={PLAY_BUTTON_PX}
         width={PLAY_BUTTON_PX}
@@ -774,6 +843,7 @@ export function DockTransport({
           pointerEvents={DECORATIVE_POINTER_EVENTS}
         />
       </Container>
+      </HoverLabel>
 
       {/* Takes everything the Play/Pause button does not, and no `alignItems`
           override: a flex column stretches its children by default, so both
@@ -893,6 +963,7 @@ export function DockTransport({
               <IconButton
                 size={CRUMB_ROW_HEIGHT_PX}
                 disabled={neighbours.previous == null}
+                label={LABEL.previousEpisode}
                 onPress={() => openNeighbour(neighbours.previous?.id)}
               >
                 <SkipBack
@@ -904,6 +975,7 @@ export function DockTransport({
               <IconButton
                 size={CRUMB_ROW_HEIGHT_PX}
                 disabled={neighbours.next == null}
+                label={LABEL.nextEpisode}
                 onPress={() => openNeighbour(neighbours.next?.id)}
               >
                 <SkipForward
@@ -927,6 +999,9 @@ export function DockTransport({
             background={captionsActive ? ACTIVE_BG : BUTTON_BG}
             hoverBackground={captionsActive ? ACTIVE_BG_HOVER : BUTTON_BG_HOVER}
             disabled={subtitlesDisabled}
+            // Names the state the press moves TO, like the shell's own
+            // Curved/Flat button - see LABEL.
+            label={captionsActive ? LABEL.captionsOff : LABEL.captionsOn}
             onPress={toggleSubtitles}
           >
             <CaptionIcon width={SMALL_ICON_PX} height={SMALL_ICON_PX} color={captionColor} />
@@ -937,6 +1012,7 @@ export function DockTransport({
               <IconButton
                 size={CRUMB_ROW_HEIGHT_PX}
                 disabled={subtitleScale <= MIN_CAPTION_SCALE}
+                label={LABEL.captionSmaller}
                 onPress={() => stepSize(-1)}
               >
                 <Minus
@@ -954,6 +1030,7 @@ export function DockTransport({
               <IconButton
                 size={CRUMB_ROW_HEIGHT_PX}
                 disabled={subtitleScale >= MAX_CAPTION_SCALE}
+                label={LABEL.captionLarger}
                 onPress={() => stepSize(1)}
               >
                 <Plus
@@ -965,6 +1042,7 @@ export function DockTransport({
               <IconButton
                 size={CRUMB_ROW_HEIGHT_PX}
                 disabled={subtitleOffsetDeg >= MAX_CAPTION_OFFSET_DEG}
+                label={LABEL.captionUp}
                 onPress={() => stepOffset(1)}
               >
                 <ChevronUp
@@ -976,6 +1054,7 @@ export function DockTransport({
               <IconButton
                 size={CRUMB_ROW_HEIGHT_PX}
                 disabled={subtitleOffsetDeg <= MIN_CAPTION_OFFSET_DEG}
+                label={LABEL.captionDown}
                 onPress={() => stepOffset(-1)}
               >
                 <ChevronDown
@@ -997,29 +1076,63 @@ export function DockTransport({
             size={CRUMB_ROW_HEIGHT_PX}
             background={muted ? ACTIVE_BG : BUTTON_BG}
             hoverBackground={muted ? ACTIVE_BG_HOVER : BUTTON_BG_HOVER}
+            label={muted ? LABEL.unmute : LABEL.mute}
+            labelAlign="right"
             onPress={toggleMuted}
           >
             <VolumeIcon width={SMALL_ICON_PX} height={SMALL_ICON_PX} color="#ffffff" />
           </IconButton>
-          <IconButton size={CRUMB_ROW_HEIGHT_PX} disabled={volume <= 0} onPress={() => applyVolumeStep(-1)}>
+          <IconButton
+            size={CRUMB_ROW_HEIGHT_PX}
+            disabled={volume <= 0}
+            label={LABEL.volumeDown}
+            labelAlign="right"
+            onPress={() => applyVolumeStep(-1)}
+          >
             <Minus width={SMALL_ICON_PX} height={SMALL_ICON_PX} color={volume <= 0 ? DISABLED_COLOR : '#ffffff'} />
           </IconButton>
           <Text fontSize={11} color={muted ? DISABLED_COLOR : '#cfd8ff'} width={30} textAlign="center">
             {`${volumeToPercent(volume)}%`}
           </Text>
-          <IconButton size={CRUMB_ROW_HEIGHT_PX} disabled={volume >= 1} onPress={() => applyVolumeStep(1)}>
+          <IconButton
+            size={CRUMB_ROW_HEIGHT_PX}
+            disabled={volume >= 1}
+            label={LABEL.volumeUp}
+            labelAlign="right"
+            onPress={() => applyVolumeStep(1)}
+          >
             <Plus width={SMALL_ICON_PX} height={SMALL_ICON_PX} color={volume >= 1 ? DISABLED_COLOR : '#ffffff'} />
           </IconButton>
 
-          {/* „Einen i/Info-Button im Dock zum Anzeigen der Infos." The Info
-              window starts closed like the other panels, so this button and its
-              dock tile are the two ways to it; pressing it again puts it away.
-              Lit like an active toggle while the window is on screen, which is
-              what makes the second press predictable. */}
+          {/* The window toggles, together at the end of the row: „Für das
+              Transcription Fenster bitte auch noch einen Button ins Dock, statt
+              des Fenster Platzhalters" and, from the round before,
+              „Einen i/Info-Button im Dock zum Anzeigen der Infos."
+              Both windows now pass `dockTile={false}`, so these buttons are
+              their way back and their dock tile is gone; both are lit like an
+              active toggle while their window is on screen, which is what makes
+              the second press predictable.
+
+              Transkript takes `ScrollText` - a scroll of running text, which is
+              what a transcript is, and legible at 13 px against its neighbours
+              in a way `FileText` (a document, i.e. "a file") is not. It sits
+              before Info because it is the one a viewer opens WHILE watching. */}
+          <IconButton
+            size={CRUMB_ROW_HEIGHT_PX}
+            background={transcriptOpen ? ACTIVE_BG : BUTTON_BG}
+            hoverBackground={transcriptOpen ? ACTIVE_BG_HOVER : BUTTON_BG_HOVER}
+            label={LABEL.transcript}
+            labelAlign="right"
+            onPress={() => togglePanel(PANEL_WINDOW_IDS.transcript, transcriptWindow)}
+          >
+            <ScrollText width={SMALL_ICON_PX} height={SMALL_ICON_PX} color="#ffffff" />
+          </IconButton>
           <IconButton
             size={CRUMB_ROW_HEIGHT_PX}
             background={infoOpen ? ACTIVE_BG : BUTTON_BG}
             hoverBackground={infoOpen ? ACTIVE_BG_HOVER : BUTTON_BG_HOVER}
+            label={LABEL.info}
+            labelAlign="right"
             onPress={() => togglePanel(PANEL_WINDOW_IDS.info, infoWindow)}
           >
             <Info width={SMALL_ICON_PX} height={SMALL_ICON_PX} color="#ffffff" />
