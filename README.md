@@ -1,8 +1,7 @@
 # `opencast-player`
 
 A WebXR player for [Opencast](https://opencast.org/) lecture recordings, built
-on [`sphere-shell`](../../packages/sphere-shell/README.md). Step 2 of
-OpencastXR.
+on [`sphere-shell`](https://github.com/rrolf/sphere-shell) (npm: `sphere-shell`).
 
 Every video track of a recording becomes its own window on the sphere around
 you — presenter camera, screen recording, whatever else the recording carries —
@@ -15,15 +14,21 @@ login, no HLS, no quizzes — see [Scope](#scope-and-non-goals).
 
 ## Run it
 
-From the repo root (`npx pnpm@10.4.1` works in place of `pnpm` if pnpm is not
-on your PATH):
+`npx pnpm@10.4.1` works in place of `pnpm` if pnpm is not on your PATH:
 
 ```bash
 pnpm install
-pnpm --filter opencast-player dev     # HTTPS on all interfaces, port 5190
-pnpm --filter opencast-player test    # 367 unit tests
-pnpm --filter opencast-player build
+pnpm dev     # HTTPS on all interfaces, port 5190
+pnpm test    # unit tests
+pnpm build
 ```
+
+**Note:** until `sphere-shell@0.3.0` is published on npm, `pnpm install` will
+fail to resolve the `sphere-shell` dependency. Once it is published, run
+`pnpm install` and commit the resulting `pnpm-lock.yaml`.
+(Bis zur Veröffentlichung von `sphere-shell` 0.3.0 auf npm schlägt
+`pnpm install` fehl; danach `pnpm install` ausführen und die entstehende
+`pnpm-lock.yaml` committen.)
 
 **First run of `dev` asks for your password.** WebXR requires a secure
 context, so the dev server speaks HTTPS via `vite-plugin-mkcert`, which
@@ -34,13 +39,13 @@ Then open the printed URL. On a desktop you get the magic window (mouse-drag
 to look, `R` to recenter); the top-left overlay has the "VR betreten" button
 when a headset is present, and otherwise says in one line *why* WebXR is
 unavailable. For a headset, see
-[`docs/QUEST-VALIDATION-PLAYER.md`](../../docs/QUEST-VALIDATION-PLAYER.md),
+[`docs/QUEST-VALIDATION-PLAYER.md`](docs/QUEST-VALIDATION-PLAYER.md),
 which covers the LAN and `adb reverse` routes and the whole acceptance
 checklist.
 
 For a production deployment as a static site (nginx, TLS, SELinux, firewalld,
 on Rocky Linux 10), see
-[`docs/INSTALL-rocky-linux-10.md`](../../docs/INSTALL-rocky-linux-10.md).
+[`docs/INSTALL-rocky-linux-10.md`](docs/INSTALL-rocky-linux-10.md).
 
 ## Controls
 
@@ -259,20 +264,20 @@ and the HUD only ever *displays*).
   around (a `hover={undefined}` reconciler crash, missing glyphs for
   typographic punctuation, a many-wrapped-lines rendering limit, stale
   `e.point` under pointer capture). Read
-  [`docs/UIKIT-NOTES.md`](../../docs/UIKIT-NOTES.md) before re-diagnosing one
+  [`docs/UIKIT-NOTES.md`](docs/UIKIT-NOTES.md) before re-diagnosing one
   from scratch.
 
 ## Documentation
 
 | Where | What |
 |---|---|
-| [`docs/QUEST-VALIDATION-PLAYER.md`](../../docs/QUEST-VALIDATION-PLAYER.md) | The hardware checklist: how to reach a dev server from a headset, the Definition of Done as checks, and what is still unverified. |
-| [`docs/superpowers/specs/2026-08-23-opencast-player-design.md`](../../docs/superpowers/specs/2026-08-23-opencast-player-design.md) | The design spec this was built from — error cases (§9) and the Definition of Done (§11) included. |
-| [`docs/UIKIT-NOTES.md`](../../docs/UIKIT-NOTES.md) | Real `@react-three/uikit` defects and their workarounds. |
-| [`packages/sphere-shell/README.md`](../../packages/sphere-shell/README.md) | The window-shell API this app is written against. |
-| [`docs/INSTALL-rocky-linux-10.md`](../../docs/INSTALL-rocky-linux-10.md) | Production deployment as a static site on Rocky Linux 10 (nginx, TLS, SELinux, firewalld) — German, for university admins. |
+| [`docs/QUEST-VALIDATION-PLAYER.md`](docs/QUEST-VALIDATION-PLAYER.md) | The hardware checklist: how to reach a dev server from a headset, the Definition of Done as checks, and what is still unverified. |
+| [`docs/design-spec.md`](docs/design-spec.md) | The design spec this was built from — error cases (§9) and the Definition of Done (§11) included. |
+| [`docs/UIKIT-NOTES.md`](docs/UIKIT-NOTES.md) | Real `@react-three/uikit` defects and their workarounds. |
+| [`sphere-shell`](https://github.com/rrolf/sphere-shell) | The window-shell API this app is written against. |
+| [`docs/INSTALL-rocky-linux-10.md`](docs/INSTALL-rocky-linux-10.md) | Production deployment as a static site on Rocky Linux 10 (nginx, TLS, SELinux, firewalld) — German, for university admins. |
 
 ## License
 
-[Apache License 2.0](../../LICENSE). Copyright 2026 Universität Osnabrück,
-virtUOS. Author: Rüdiger Rolf. See [`NOTICE`](../../NOTICE) for attribution.
+[Apache License 2.0](LICENSE). Copyright 2026 Universität Osnabrück,
+virtUOS. Author: Rüdiger Rolf. See [`NOTICE`](NOTICE) for attribution.
