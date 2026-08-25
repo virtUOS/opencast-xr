@@ -27,6 +27,20 @@
  * Reihe needs a series) are unaffected: they register nothing when they have
  * nothing to show, so there is nothing to close and no tile - which is right.
  *
+ * ## ...and which of them actually GET a tile
+ *
+ * Only Kapitel and Transkript. Reihe and Info each have a control of their own
+ * in the dock - the breadcrumb's last crumb and the „i" button - so they pass
+ * `dockTile={false}` to `<Window>` and the tiles strip leaves them out („Fuer
+ * Fenster die einen Button im Dock haben keine Platzhalter der Fenster im Dock
+ * anzeigen"). Kapitel and Transkript have no such button, so their tile is the
+ * only way back and stays.
+ *
+ * That is why `togglePanel` in `DockTransport.tsx` has to go through the
+ * shell's `restore` rather than anything narrower: for those two windows it is
+ * the ONLY thing that can bring them back from closed, which is exactly the
+ * contract `WindowProps.dockTile` documents.
+ *
  * ## Who does the closing, and who does the opening
  *
  * The SHELL owns open/closed, always (see `PlayerStore.closeStream`'s doc

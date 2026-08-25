@@ -115,6 +115,15 @@ export function SeriesWindow({
       title="Reihe"
       size={{ width: 30, height: 30 }}
       position={{ azimuth: SERIES_AZIMUTH_DEG, elevation: PANEL_ELEVATION_DEG }}
+      // No dock tile: the breadcrumb's last crumb (the recording's own name,
+      // with its list icon) opens and closes this window, so a tile would be a
+      // second control for the same job - „Fuer Fenster die einen Button im
+      // Dock haben keine Platzhalter der Fenster im Dock anzeigen".
+      //
+      // That crumb is what has to honour `dockTile`'s contract (see the prop's
+      // doc comment): it restores from CLOSED, not just from minimized, because
+      // it goes through the shell's `restore` - which clears both flags.
+      dockTile={false}
     >
       <Container flexGrow={1} flexDirection="column">
         {openError && (

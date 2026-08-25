@@ -60,6 +60,13 @@ export function ControlsWindow({ store }: { store: PlayerStoreApi }) {
       // it - this is text only now.
       size={{ width: 26, height: 14 }}
       position={{ azimuth: 0, elevation: 22 }}
+      // No dock tile: the dock's own „i" button opens and closes this window,
+      // so a tile would be a second control for the same job - „Fuer Fenster
+      // die einen Button im Dock haben keine Platzhalter der Fenster im Dock
+      // anzeigen". That button honours `dockTile`'s contract (see the prop's doc
+      // comment): it restores from CLOSED as well as from minimized, because it
+      // goes through the shell's `restore`, which clears both flags.
+      dockTile={false}
     >
       <Container flexDirection="column" gap={6} padding={12} flexGrow={1}>
         <Text fontSize={14} color="#ffffff">{episode.title}</Text>
