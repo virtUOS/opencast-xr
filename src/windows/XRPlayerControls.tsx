@@ -2,18 +2,15 @@ import { useRef } from 'react'
 import { useFrame } from '@react-three/fiber'
 import { UNSAFE_useXRStore, type XRControllerState } from '@react-three/xr'
 import type { PlayerStoreApi } from '../player/store'
+import type { OcSegment } from '../opencast/types'
 import {
-  INITIAL_FLICK_STATE,
-  INITIAL_PRESS_LATCH,
-  INITIAL_STICK_SEEK_STATE,
-  chapterSeekTarget,
-  stepChapterFlick,
-  stepPressLatch,
-  stepStickSeek,
-  type FlickState,
-  type PressLatchState,
-  type StickSeekState,
+  INITIAL_XR_PLAYER_INPUT_STATE,
+  stepPlayerFrame,
+  type XRPlayerInputState,
 } from '../player/xrPlayerInput'
+
+/** Stable empty array, so a resting frame in browse mode allocates nothing. */
+const NO_SEGMENTS: OcSegment[] = []
 
 /**
  * The player's VR controller bindings, as an R3F null component: it renders
@@ -26,11 +23,18 @@ import {
  * | **A** (right) or **X** (left) | play/pause |
  * | **B** (right), held ~1 s | recenter — sphere-shell's, not this component's |
  *
- * All the logic that could be wrong lives in `player/xrPlayerInput.ts`, pure
- * and unit-tested; this file is the glue that reads a gamepad and writes to the
- * store, and is deliberately boring enough to be verified by reading. Same
- * split, and the same reason for it, as `timelineDrag.ts`/`DockTransport.tsx`:
- * no XR session is reachable in this project's automated environment.
+ * Every decision — including the interactions BETWEEN the three bindings — lives
+ * in `player/xrPlayerInput.ts`'s `stepPlayerFrame`, a pure
+ * `(state, input) -> { state, effects }` reducer. This file reads a gamepad,
+ * calls it, and executes the effects. Same split, and the same reason for it,
+ * as `timelineDrag.ts`/`DockTransport.tsx`: no XR session is reachable in this
+ * project's automated environment.
+ *
+ * The one thing that split cannot cover is whether this file hands the reducer
+ * the RIGHT inputs — and that was where the round's worst bug lived (the
+ * `engine.currentTime` comment below). So there is also
+ * `XRPlayerControls.test.tsx`, which drives this component against a real store
+ * with `useFrame`/`UNSAFE_useXRStore` mocked.
  *
  * ## Why the app reads the controller itself
  *
@@ -69,25 +73,13 @@ import {
  */
 export function XRPlayerControls({ store }: { store: PlayerStoreApi }) {
   const xrStore = UNSAFE_useXRStore()
-  const seek = useRef<StickSeekState>(INITIAL_STICK_SEEK_STATE)
-  const flick = useRef<FlickState>(INITIAL_FLICK_STATE)
-  const playPause = useRef<PressLatchState>(INITIAL_PRESS_LATCH)
+  const input = useRef<XRPlayerInputState>(INITIAL_XR_PLAYER_INPUT_STATE)
 
   useFrame((_, delta) => {
     const xr = xrStore?.getState()
-    if (!xr?.session) {
-      // Leaving a session mid-scrub must not leave the HUD showing a preview
-      // that nothing will ever commit or clear.
-      if (seek.current.targetS !== null) {
-        seek.current = INITIAL_STICK_SEEK_STATE
-        store.getState().setSeekPreview(null)
-      }
-      flick.current = INITIAL_FLICK_STATE
-      playPause.current = INITIAL_PRESS_LATCH
-      return
-    }
+    const state = store.getState()
 
-    const controllers = xr.inputSourceStates
+    const controllers = xr?.inputSourceStates ?? []
     const byHand = (handedness: 'left' | 'right') =>
       controllers.find(
         (s): s is XRControllerState =>
@@ -97,63 +89,54 @@ export function XRPlayerControls({ store }: { store: PlayerStoreApi }) {
     const right = byHand('right')
     const stick = left?.gamepad['xr-standard-thumbstick']
 
-    // Play/pause: A (right) and X (left) are ONE control, so a single latch
-    // over their disjunction — pressing both at once toggles once. Through the
-    // store's `setPlaying`, which is the app's only writer of play intent (see
-    // store.ts), so the dock's button and this stay in step by construction.
-    const primaryPressed =
-      right?.gamepad['a-button']?.state === 'pressed' ||
-      left?.gamepad['x-button']?.state === 'pressed'
-    const { state: nextLatch, fire: togglePlay } = stepPressLatch(playPause.current, primaryPressed)
-    playPause.current = nextLatch
-    if (togglePlay) {
-      const state = store.getState()
-      state.setPlaying(!state.playing)
-    }
-
-    const { episode, currentTimeS, seekPreviewS } = store.getState()
-    if (!episode) return // browse mode, or before the first recording opened
-
-    // Chapter flick (vertical). Evaluated BEFORE the scrub so that a diagonal
-    // push that clears the flick threshold resolves as the chapter jump and
-    // abandons any scrub in progress — one gesture, one outcome. Without that,
-    // the abandoned scrub would commit its own seek on release and silently
-    // undo the chapter the user just jumped to.
-    const { state: nextFlick, steps } = stepChapterFlick(flick.current, stick?.yAxis ?? 0)
-    flick.current = nextFlick
-    if (steps !== 0) {
-      // From the SCRUB target when one is in flight, so a flick during a scrub
-      // steps from where the viewer is currently pointing rather than from the
-      // playhead they have already scrubbed away from.
-      const from = seek.current.targetS ?? currentTimeS
-      const target = chapterSeekTarget(episode.segments, from, steps)
-      if (seek.current.targetS !== null) {
-        seek.current = INITIAL_STICK_SEEK_STATE
-        store.getState().setSeekPreview(null)
-      }
-      // `null` = no chapter that way (or no chapters at all): a silent no-op.
-      if (target !== null) store.getState().engine.seek(target)
-      return
-    }
-
-    // Horizontal scrub: preview while held, ONE seek on release — see
-    // stepStickSeek's doc comment for why a video element must not be seeked
-    // every frame, and note this is the same preview field, and therefore the
-    // same HUD and dock feedback, the timeline drag already drives.
-    const result = stepStickSeek(seek.current, {
+    const { state: next, effects } = stepPlayerFrame(input.current, {
+      hasSession: !!xr?.session,
+      hasEpisode: state.episode != null,
       xAxis: stick?.xAxis ?? 0,
+      yAxis: stick?.yAxis ?? 0,
+      // A (right) and X (left) are ONE control — see stepPressLatch.
+      primaryPressed:
+        right?.gamepad['a-button']?.state === 'pressed' ||
+        left?.gamepad['x-button']?.state === 'pressed',
       delta,
-      currentTimeS,
-      durationS: (episode.durationMs ?? 0) / 1000,
+      // `engine.currentTime`, NOT the store's `currentTimeS`. This is
+      // load-bearing and was a real bug: the store's field is a mirror
+      // refreshed by a 250 ms interval (`tickOnce`), so for up to a quarter
+      // second after ANY seek it still reports the position the viewer just
+      // left. A gesture based on it would scrub away from a stale point and
+      // commit a seek back towards it — which made a chapter flick undo itself
+      // via its own return path, made a quick reverse scrub cancel the seek
+      // before it, and made a second flick a no-op. The engine's getter reads
+      // the master element, which `SyncEngine.seek` writes synchronously, so it
+      // is correct on the very next frame. Pinned by XRPlayerControls.test.tsx,
+      // which never ticks the mirror at all.
+      currentTimeS: state.engine.currentTime,
+      durationS: (state.episode?.durationMs ?? 0) / 1000,
+      segments: state.episode?.segments ?? NO_SEGMENTS,
+      previewS: state.seekPreviewS,
     })
-    seek.current = result.state
-    if (result.preview !== null) store.getState().setSeekPreview(result.preview)
-    if (result.commit !== null) {
-      store.getState().engine.seek(result.commit)
-      // Only clear a preview if one is actually showing: a `setSeekPreview(null)`
-      // on a store that already holds null still pushes a new state object at
-      // every subscriber, and this runs every frame.
-      if (seekPreviewS !== null) store.getState().setSeekPreview(null)
+    input.current = next
+
+    // Every decision was made above; this is execution only. Read through
+    // `store.getState()` each time rather than the `state` snapshot, since an
+    // earlier effect in the same frame may have moved it.
+    for (const effect of effects) {
+      switch (effect.type) {
+        case 'togglePlay': {
+          const live = store.getState()
+          live.setPlaying(!live.playing)
+          break
+        }
+        case 'preview':
+          store.getState().setSeekPreview(effect.seconds)
+          break
+        case 'clearPreview':
+          store.getState().setSeekPreview(null)
+          break
+        case 'seek':
+          store.getState().engine.seek(effect.seconds)
+          break
+      }
     }
   })
 
