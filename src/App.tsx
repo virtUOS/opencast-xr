@@ -21,6 +21,7 @@ import { ChaptersWindow } from './windows/ChaptersWindow'
 import { SeriesWindow } from './windows/SeriesWindow'
 import { TranscriptWindow } from './windows/TranscriptWindow'
 import { SubtitleHud } from './windows/SubtitleHud'
+import { XRPlayerControls } from './windows/XRPlayerControls'
 import { createSeriesState } from './windows/seriesState'
 import { SyntheticDualStreamClient } from './dev/syntheticDualStream'
 
@@ -280,6 +281,15 @@ export function App() {
           <WindowShell
             radius={SHELL_RADIUS}
             curved={false}
+            // „Taste A und X für Play/Pause. Taste B dann zum Neuzentrieren."
+            // The right controller has exactly two face buttons, and the
+            // library's default binds A to a hold-to-recenter — so taking A for
+            // play/pause (see <XRPlayerControls>) means one press would
+            // otherwise do BOTH. sphere-shell 0.3.0 added this prop for exactly
+            // this collision; recentering keeps its ~1 s hold on B, which is
+            // the library's deliberate guard against a brushed thumb throwing
+            // the whole shell to a new position and yaw.
+            recenterButton="b-button"
             // Player mode only ("Browse mode shows no transport", Task 13's
             // brief) - undefined rather than an empty fragment while
             // browsing, so the dock renders its own default
@@ -311,6 +321,13 @@ export function App() {
               nothing itself while browsing (its own self-gate: no cues, no
               seek preview outside player mode). */}
           {mode === 'player' && <SubtitleHud store={playerStore} />}
+          {/* Also not a window, and for the same reason: it renders nothing at
+              all - it is a useFrame reading the controllers (left stick =
+              seek/chapters, A/X = play/pause). Inside <XR> because that is
+              where the input-source store lives, outside <WindowShell> because
+              it is the app's own input, not the shell's. Player mode only:
+              there is nothing to seek or pause while browsing. */}
+          {mode === 'player' && <XRPlayerControls store={playerStore} />}
         </XR>
       </Canvas>
     </div>
