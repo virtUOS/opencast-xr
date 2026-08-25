@@ -5,7 +5,7 @@ import { xrPointerOptions } from 'sphere-shell'
 // The automatic emulation didn't surface an overlay or an "immersive-vr"
 // session in headless verification, so emulation is forced on explicitly.
 //
-// `xrPointerOptions` is NOT optional decoration. It carries the two pointer
+// `xrPointerOptions` is NOT optional decoration. It carries the three pointer
 // settings only the application can supply, because only the application
 // creates the store:
 //
@@ -19,6 +19,13 @@ import { xrPointerOptions } from 'sphere-shell'
 //   - rayModel.maxLength. The ray is drawn `min(maxLength ?? 1, hitDistance)`
 //     long, so with the upstream default it stops at 1 m — halfway to a shell
 //     whose radius is 2 m — and looks like it never reaches the windows.
+//   - clickThresholdMs. @pmndrs/pointer-events discards any press longer than
+//     300 ms: `getIsClicked` returns false on
+//     `buttonUpTime - objectButtonPressTime > clickThresholdMs`, and a rejected
+//     click still emits pointerdown and pointerup. A deliberate VR press (aim,
+//     settle, squeeze, release) routinely exceeds that, so buttons highlight
+//     and then do nothing — which is exactly what the user reported from the
+//     headset. Raised to XR_CLICK_THRESHOLD_MS (1500).
 //
 // The radius here must match <WindowShell radius> below (see App.tsx).
 // See sphere-shell's core/renderOrder.ts and the README's Conventions section.
