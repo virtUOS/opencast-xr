@@ -23,13 +23,6 @@ pnpm test    # unit tests
 pnpm build
 ```
 
-**Note:** until `sphere-shell@0.3.0` is published on npm, `pnpm install` will
-fail to resolve the `sphere-shell` dependency. Once it is published, run
-`pnpm install` and commit the resulting `pnpm-lock.yaml`.
-(Bis zur Veröffentlichung von `sphere-shell` 0.3.0 auf npm schlägt
-`pnpm install` fehl; danach `pnpm install` ausführen und die entstehende
-`pnpm-lock.yaml` committen.)
-
 **First run of `dev` asks for your password.** WebXR requires a secure
 context, so the dev server speaks HTTPS via `vite-plugin-mkcert`, which
 installs its root CA into the system keychain. Answer once; it will not ask
