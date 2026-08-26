@@ -41,7 +41,23 @@ export const SHELL_RADIUS = 2
 // alias for createXRStore's return type, so naming it here sidesteps the
 // inference entirely (see task-10-report.md for the demo's pre-existing,
 // un-annotated instance of this same error).
+// `emulate` was `true` unconditionally, which forced @react-three/xr's IWER
+// emulator into the PRODUCTION bundle too. IWER pulls in `iwer`,
+// `@iwer/devui`, and `@iwer/sem` -- the latter ships multi-megabyte JSON
+// "scene capture" files (captures/office_large.json etc.) that Vite/esbuild
+// must transform during `vite build`. On memory-constrained hosts (a Rocky
+// Linux 10 VM with little RAM, in production) this OOMs the build:
+// "FATAL ERROR: Reached heap limit ... transforming (3674)
+// .../@iwer+sem@.../lib/captures/office_large.json". The emulator is a
+// desktop-dev aid only (it stands in for a headset when none is attached),
+// so it has no business shipping to users. `import.meta.env.DEV` is Vite's
+// static build-mode flag: true under `pnpm dev`, false in `vite build`,
+// so this preserves the exact prior dev behavior (emulator forced on,
+// matching @react-three/xr's `EmulatorOptions | boolean` type for `emulate`)
+// while disabling it in production. This alone does not stop the emulator's
+// code from being bundled, though -- see the build-only alias in
+// vite.config.ts for the second half of the fix.
 export const xrStore: XRStore = createXRStore({
-  emulate: true,
+  emulate: import.meta.env.DEV,
   ...xrPointerOptions({ radius: SHELL_RADIUS }),
 })
