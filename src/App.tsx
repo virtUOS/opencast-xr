@@ -12,6 +12,8 @@ import { SHELL_RADIUS, xrStore } from './xrStore'
 import { VerificationHandle } from './verificationHandle'
 import { OpencastClient } from './opencast/client'
 import { captionPrefsStorage, readCaptionPrefs, writeCaptionPrefs } from './captionPrefs'
+import { availableBackground, backgroundColorFor, sessionModeFor, type BackgroundMode } from './backgroundMode'
+import { backgroundPrefsStorage, readBackgroundPrefs, writeBackgroundPrefs } from './backgroundPrefs'
 import { createPlayerStore } from './player/store'
 import { LibraryWindow } from './windows/LibraryWindow'
 import { VideoWindows } from './windows/VideoWindows'
@@ -31,13 +33,15 @@ import { SyntheticDualStreamClient } from './dev/syntheticDualStream'
  * Copied from apps/demo/src/App.tsx's `describeXrEnvironment`/`XrStatus`
  * (see that file's doc comment for the full rationale: hiding the button
  * when `navigator.xr` is missing makes "can't start a session" and "still
- * probing" indistinguishable). Trimmed to VR only — the player has no
- * passthrough/background mode (not in the plan; that machinery is
- * demo-specific), so there is nothing here to probe or offer for AR.
+ * probing" indistinguishable). `ar` was dropped when this was first trimmed
+ * for the player ("the player has no passthrough/background mode"); it is
+ * back now that the start overlay offers a background choice - `ar: false`
+ * is what disables the "Durchsichtig" radio (see `availableBackground` in
+ * `backgroundMode.ts`) instead of leaving it selectable and failing on click.
  */
 type XrStatus =
   | { kind: 'checking' }
-  | { kind: 'ready' }
+  | { kind: 'ready'; vr: boolean; ar: boolean }
   | { kind: 'unavailable'; reason: string }
 
 function describeXrEnvironment(): XrStatus | null {
@@ -174,13 +178,19 @@ export function App() {
       return
     }
     let cancelled = false
-    navigator.xr!.isSessionSupported('immersive-vr')
-      .then((vr) => {
+    Promise.all([
+      navigator.xr!.isSessionSupported('immersive-vr'),
+      navigator.xr!.isSessionSupported('immersive-ar'),
+    ])
+      .then(([vr, ar]) => {
         if (cancelled) return
         setXrStatus(
-          vr
-            ? { kind: 'ready' }
-            : { kind: 'unavailable', reason: 'browser has WebXR but reports no immersive-vr device' },
+          vr || ar
+            ? { kind: 'ready', vr, ar }
+            : {
+                kind: 'unavailable',
+                reason: 'browser has WebXR but reports neither an immersive-vr nor an immersive-ar device',
+              },
         )
       })
       .catch((error: unknown) => {
@@ -195,16 +205,94 @@ export function App() {
     }
   }, [])
 
+  // What is behind the windows once a session starts. 'black' (the player's
+  // original, and only, look) is the default, chosen on the start overlay -
+  // see `backgroundMode.ts` for why this is scoped to that overlay and not
+  // wired into an in-session toggle yet. Survives a reload via
+  // `backgroundPrefs.ts`, same defensive try/catch contract as
+  // `captionPrefs.ts`, in the same `opencastxr.player.*` key family - lazily
+  // read once, on mount, exactly like the caption prefs' own `useEffect`
+  // below (kept as a separate effect, not merged with it: this preference
+  // has its own storage key and its own reader, the start overlay, not the
+  // player store).
+  const backgroundStorage = useMemo(() => backgroundPrefsStorage(), [])
+  const [background, setBackgroundState] = useState<BackgroundMode>(
+    () => readBackgroundPrefs(backgroundPrefsStorage()).background,
+  )
+  const chooseBackground = useCallback(
+    (next: BackgroundMode) => {
+      setBackgroundState(next)
+      writeBackgroundPrefs(backgroundStorage, { background: next })
+    },
+    [backgroundStorage],
+  )
+  // Never hands `xrStore.enterAR()` a mode this device has not actually
+  // reported support for - see `availableBackground`'s doc comment. Only
+  // meaningful once `xrStatus` is `'ready'`; before that (or if WebXR is
+  // unavailable outright) the enter button itself is not rendered, so no
+  // click can reach this with a stale `false`.
+  const arAvailable = xrStatus.kind === 'ready' && xrStatus.ar
+  const effectiveBackground = availableBackground(background, arAvailable)
+  const sceneBackgroundColor = backgroundColorFor(effectiveBackground)
+
   const enterVR = useCallback(() => {
     setEnterError(null)
-    void Promise.resolve(xrStore.enterVR()).catch((error: unknown) => {
-      setEnterError(`VR konnte nicht gestartet werden: ${error instanceof Error ? error.message : String(error)}`)
+    const mode = sessionModeFor(effectiveBackground)
+    const enter = mode === 'immersive-ar' ? xrStore.enterAR() : xrStore.enterVR()
+    void Promise.resolve(enter).catch((error: unknown) => {
+      setEnterError(`Sitzung konnte nicht gestartet werden: ${error instanceof Error ? error.message : String(error)}`)
     })
-  }, [])
+  }, [effectiveBackground])
 
   return (
     <div style={{ position: 'absolute', inset: 0 }}>
       <div style={{ position: 'absolute', zIndex: 1, padding: 8, display: 'flex', gap: 8, alignItems: 'center' }}>
+        {/* The background choice, decided here rather than in-session:
+            sphere-shell 0.3.0's dock „..." menu takes no app-supplied rows
+            (see backgroundMode.ts's doc comment) - so the start overlay is
+            the only place this can be offered today, and it doubles as the
+            way back after a restart, since it remembers the last choice
+            (backgroundPrefs.ts) and a viewer who exits a black session to
+            get passthrough (or back) lands here with the OTHER option one
+            click away. Radio-style rather than a toggle: both options are
+            named plainly, so there is nothing to infer from a single
+            button's current label the way the demo's dock button has to. */}
+        {xrStatus.kind === 'ready' && (
+          <fieldset
+            style={{
+              display: 'flex', gap: 10, alignItems: 'center', margin: 0,
+              color: '#e8e8ee', background: '#22222a', border: '1px solid #44444e',
+              borderRadius: 4, padding: '4px 10px', font: '12px system-ui, sans-serif',
+            }}
+          >
+            <legend style={{ padding: '0 4px' }}>Hintergrund</legend>
+            <label style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+              <input
+                type="radio"
+                name="background"
+                checked={effectiveBackground === 'black'}
+                onChange={() => chooseBackground('black')}
+              />
+              Schwarz
+            </label>
+            <label
+              style={{
+                display: 'flex', gap: 4, alignItems: 'center',
+                color: xrStatus.ar ? undefined : '#5a5a65',
+              }}
+              title={xrStatus.ar ? undefined : 'Kein Passthrough: dieses Gerät meldet keinen immersive-ar Modus'}
+            >
+              <input
+                type="radio"
+                name="background"
+                disabled={!xrStatus.ar}
+                checked={effectiveBackground === 'passthrough'}
+                onChange={() => chooseBackground('passthrough')}
+              />
+              Durchsichtig (Passthrough)
+            </label>
+          </fieldset>
+        )}
         {xrStatus.kind === 'ready' && (
           <button onClick={enterVR} style={{ padding: '8px 16px' }}>
             VR betreten
@@ -275,7 +363,15 @@ export function App() {
       </div>
       <Canvas camera={{ position: [0, 0, 0.01], fov: 70 }}>
         <VerificationHandle store={playerStore} />
-        <color attach="background" args={['#101014']} />
+        {/* Rendered conditionally rather than always-on-black: a null
+            background is what turns the flat-browser canvas transparent
+            (index.html's checkerboard shows through) and, once inside an
+            immersive-ar session, is the whole passthrough mechanism - see
+            backgroundColorFor's doc comment and apps/demo/src/App.tsx's
+            identical `{backgroundColor != null && <color .../>}` line. */}
+        {sceneBackgroundColor != null && (
+          <color attach="background" args={[sceneBackgroundColor]} />
+        )}
         <ambientLight intensity={1} />
         <XR store={xrStore}>
           <WindowShell
