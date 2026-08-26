@@ -5,3 +5,4 @@ vite.local-*.mts
 .DS_Store
 *.pem
 .superpowers/
+.update-config

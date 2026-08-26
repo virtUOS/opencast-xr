@@ -504,6 +504,18 @@ Wiederholen-Option an, lädt aber keine Inhalte.
 
 ## 8. Update-Verfahren
 
+Am einfachsten über das mitgelieferte Skript, das alle folgenden Schritte
+in der richtigen Reihenfolge ausführt (inklusive Einsetzen der
+Opencast-URL vor dem Build und Zurücknehmen danach). Beim ersten Aufruf
+legt es eine `.update-config` an, in die `OPENCAST_URL` und `WEBROOT`
+eingetragen werden; danach genügt:
+
+```bash
+./scripts/update.sh
+```
+
+Von Hand entsprechen die Schritte:
+
 ```bash
 cd opencast-xr
 git pull
