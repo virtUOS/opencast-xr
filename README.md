@@ -36,8 +36,8 @@ unavailable. For a headset, see
 which covers the LAN and `adb reverse` routes and the whole acceptance
 checklist.
 
-For a production deployment as a static site (nginx, TLS, SELinux, firewalld,
-on Rocky Linux 10), see
+For a production deployment as a static site (Caddy with automatic Let's
+Encrypt — or nginx —, SELinux, firewalld, on Rocky Linux 10), see
 [`docs/INSTALL-rocky-linux-10.md`](docs/INSTALL-rocky-linux-10.md).
 
 ## Controls
@@ -268,7 +268,7 @@ and the HUD only ever *displays*).
 | [`docs/design-spec.md`](docs/design-spec.md) | The design spec this was built from — error cases (§9) and the Definition of Done (§11) included. |
 | [`docs/UIKIT-NOTES.md`](docs/UIKIT-NOTES.md) | Real `@react-three/uikit` defects and their workarounds. |
 | [`sphere-shell`](https://github.com/rrolf/sphere-shell) | The window-shell API this app is written against. |
-| [`docs/INSTALL-rocky-linux-10.md`](docs/INSTALL-rocky-linux-10.md) | Production deployment as a static site on Rocky Linux 10 (nginx, TLS, SELinux, firewalld) — German, for university admins. |
+| [`docs/INSTALL-rocky-linux-10.md`](docs/INSTALL-rocky-linux-10.md) | Production deployment as a static site on Rocky Linux 10 (Caddy + Let's Encrypt, alternatively nginx + certbot; SELinux, firewalld) — German, for university admins. |
 
 ## License
 
