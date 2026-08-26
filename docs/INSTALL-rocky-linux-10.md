@@ -5,18 +5,29 @@ den [`opencast-player`](../README.md) als statische
 Website produktiv auf einem Rocky-Linux-10-Server betreiben wollen. Der
 Player selbst ist ein reines Client-seitiges Build (HTML/JS/CSS ohne
 eigenen Server-Prozess); ausgeliefert wird er über einen gewöhnlichen
-Webserver (hier: nginx).
+Webserver.
+
+Diese Anleitung beschreibt zwei Wege: **Caddy mit automatischem
+Let's-Encrypt-Zertifikat** (Abschnitt 3) als empfohlenen Standardweg, und
+**nginx + certbot** (Abschnitt 4) als Alternative für den Fall, dass
+bereits nginx-Infrastruktur oder eine Hausrichtlinie dafür existiert.
+**WebXR-Sitzungen lassen sich nur in einem sicheren Kontext (HTTPS)
+starten** — egal für welchen der beiden Wege Sie sich entscheiden, muss
+am Ende ein gültiges TLS-Zertifikat stehen, sonst funktioniert der „VR
+betreten“-Knopf im Player nicht (Browser verweigern den
+WebXR-API-Zugriff über Klartext-HTTP, `localhost` ausgenommen).
 
 Alle Befehle sind zum Kopieren gedacht. Ersetzen Sie Platzhalter wie
-`opencast.example.org` und `player.example.org` durch Ihre tatsächlichen
-Hostnamen — es handelt sich **nicht** um echte, erreichbare Adressen.
+`opencast.example.org`, `player.example.org` und `admin@example.org`
+durch Ihre tatsächlichen Werte — es handelt sich **nicht** um echte,
+erreichbare Adressen.
 
 ## Inhalt
 
 1. [Voraussetzungen](#1-voraussetzungen)
 2. [Build erstellen](#2-build-erstellen)
-3. [Auslieferung mit nginx](#3-auslieferung-mit-nginx)
-4. [HTTPS (WebXR erfordert einen sicheren Kontext)](#4-https-webxr-erfordert-einen-sicheren-kontext)
+3. [Auslieferung: Caddy mit automatischem Let's Encrypt (empfohlen)](#3-auslieferung-caddy-mit-automatischem-lets-encrypt-empfohlen)
+4. [Alternative: nginx + certbot](#4-alternative-nginx--certbot)
 5. [SELinux](#5-selinux)
 6. [firewalld](#6-firewalld)
 7. [CORS auf dem Opencast-Server](#7-cors-auf-dem-opencast-server)
@@ -141,18 +152,141 @@ Das Ergebnis liegt danach unter `dist/` — eine
 JS-/CSS-Dateien. Genau dieses `dist/`-Verzeichnis wird auf den Webserver
 kopiert.
 
-## 3. Auslieferung mit nginx
+## 3. Auslieferung: Caddy mit automatischem Let's Encrypt (empfohlen)
+
+Caddy bezieht und erneuert sein TLS-Zertifikat selbständig über Let's
+Encrypt (ACME), sobald es öffentlich erreichbar ist — ohne certbot, ohne
+eigenen Renewal-Timer. Voraussetzung dafür sind ein öffentlich
+auflösender DNS-Eintrag für `player.example.org`, der auf diesen Server
+zeigt, sowie **beide** Ports 80 (für die ACME-HTTP-Challenge und die
+automatische HTTP→HTTPS-Weiterleitung) und 443 (für HTTPS selbst) von
+außen erreichbar — siehe [firewalld](#6-firewalld). Ist der Host nicht
+öffentlich erreichbar (nur internes Netz, kein öffentlicher DNS-Eintrag),
+funktioniert automatisches Let's Encrypt nicht; in dem Fall entweder
+[Option A der nginx-Alternative](#4-alternative-nginx--certbot) (eigene
+Zertifikate/Universitäts-CA — dasselbe Vorgehen lässt sich auch auf
+Caddy übertragen, indem der Caddyfile-Site-Block statt automatischem TLS
+eine `tls <zertifikat> <schlüssel>`-Zeile mit den eigenen Dateien
+bekommt) oder gleich die nginx-Alternative verwenden.
+
+### Installation
+
+Caddy liegt nicht in den Rocky-10-Standard-Repositories. Nach den
+verfügbaren Installationsanleitungen (siehe Quellen unten) braucht es auf
+Rocky Linux 10 sowohl EPEL als auch das offizielle Caddy-COPR-Repository:
+
+```bash
+sudo dnf install -y epel-release
+sudo dnf copr enable @caddy/caddy
+sudo dnf install -y caddy
+```
+
+**Nicht auf allen Minimal-Installationen vorhanden:** Meldet `dnf copr
+enable` „command not found“, fehlt das COPR-Plugin für dnf5. Nachrüsten
+mit `sudo dnf install -y dnf5-plugins` und den `copr enable`-Befehl
+danach erneut ausführen. `dnf copr` fragt beim ersten Aufruf interaktiv
+nach Bestätigung des Repository-GPG-Schlüssels — mit „y“ bestätigen.
+
+**Diese beiden Schritte konnte ich nicht gegen einen echten Rocky-Linux-10-Server
+verifizieren**, nur gegen die aktuelle Dokumentation (siehe Quellen).
+Prüfen Sie vor einem Produktiv-Rollout mit `dnf info caddy`, ob das Paket
+nach `copr enable` tatsächlich auflösbar ist, und ziehen Sie im
+Zweifel die verlinkten Quellen zurate — Caddy-Paketierung für
+RHEL-Derivate ändert sich gelegentlich.
+
+```bash
+sudo systemctl enable --now caddy
+```
+
+### Webroot anlegen und Build kopieren
+
+```bash
+sudo mkdir -p /var/www/opencast-xr
+sudo rsync -a --delete dist/ /var/www/opencast-xr/
+```
+
+### Caddyfile
+
+`/etc/caddy/Caddyfile` (ersetzt den mitgelieferten Default-Inhalt):
+
+```caddyfile
+{
+    email admin@example.org
+}
+
+player.example.org {
+    root * /var/www/opencast-xr
+    encode gzip
+    try_files {path} /index.html
+    file_server
+}
+```
+
+- Der globale Block `{ email admin@example.org }` am Dateianfang setzt
+  die Kontaktadresse, die Let's Encrypt für Ablauf-/Problemhinweise zur
+  ausgestellten Zertifikatskette nutzt. Ersetzen Sie sie durch eine
+  tatsächlich gelesene Adresse.
+- `root * /var/www/opencast-xr` setzt das Wurzelverzeichnis für den
+  Site-Block.
+- `encode gzip` aktiviert Gzip-Kompression für die ausgelieferten Dateien.
+- `try_files {path} /index.html` ist der SPA-Fallback: Existiert der
+  angefragte Pfad nicht als Datei, liefert Caddy stattdessen
+  `index.html` aus. Der Player verwendet aktuell kein clientseitiges
+  Routing (keine URLs außer `/`), die Regel schadet aber nicht und macht
+  das Deployment robust, falls künftige Versionen eigene Routen bekommen.
+- `file_server` aktiviert die eigentliche Dateiauslieferung.
+- Die Reihenfolge der Zeilen im Site-Block spielt für Caddy selbst keine
+  Rolle: Caddy sortiert Direktiven beim Laden intern nach einer festen
+  Priorität, unabhängig davon, wie sie im Caddyfile notiert sind. Die
+  Reihenfolge oben folgt nur der Lesbarkeit.
+
+Allein durch das Vorhandensein von `player.example.org` als Site-Adresse
+(ohne `http://`-Präfix) aktiviert Caddy automatisches HTTPS: Es besorgt
+sich beim ersten Start ein Let's-Encrypt-Zertifikat für genau diesen
+Namen, leitet Anfragen auf Port 80 automatisch auf HTTPS um, und erneuert
+das Zertifikat selbständig im Hintergrund, lange bevor es abläuft — ohne
+weiteres Zutun, ohne certbot, ohne eigenen systemd-Timer.
+
+Konfiguration übernehmen:
+
+```bash
+sudo systemctl reload caddy
+```
+
+(`reload` setzt voraus, dass die installierte Caddy-systemd-Unit
+`ExecReload=/usr/bin/caddy reload …` definiert, wie es die
+offiziellen Caddy-Pakete tun; prüfen Sie das im Zweifel mit
+`systemctl cat caddy`. Andernfalls tut es auch
+`sudo systemctl restart caddy`, nur mit einer kurzen Unterbrechung.)
+
+**Quellen für diesen Abschnitt** (Stand: Recherche zu dieser Anleitung;
+Paketierung und Repository-Struktur für Caddy auf RHEL-Derivaten können
+sich ändern — im Zweifel dort nachschlagen statt dieser Anleitung
+blind zu vertrauen):
+
+- [docs.rockylinux.org – Caddy Web Server](https://docs.rockylinux.org/10/guides/web/caddy/)
+- [Caddy-Dokumentation – Installation](https://caddyserver.com/docs/install)
+- [Caddy-COPR-Repository](https://copr.fedorainfracloud.org/coprs/g/caddy/caddy/)
+- [Caddy-Dokumentation – `try_files`-Direktive](https://caddyserver.com/docs/caddyfile/directives/try_files)
+
+## 4. Alternative: nginx + certbot
+
+Wählen Sie diesen Weg statt Caddy, wenn bereits nginx-Infrastruktur
+(Konfigurationsmanagement, Monitoring, Betriebswissen) existiert oder
+eine Hausrichtlinie nginx vorschreibt. Funktional unterscheidet sich das
+Ergebnis nicht vom Caddy-Weg — nur der Betriebsaufwand (eigener
+certbot-Timer statt eingebauter Erneuerung).
+
+### Installation und Webroot
 
 ```bash
 sudo dnf install -y nginx
 sudo systemctl enable --now nginx
 ```
 
-Webroot anlegen und den Build hineinkopieren (Beispiel-Pfad, anpassbar):
-
 ```bash
-sudo mkdir -p /var/www/opencast-player
-sudo rsync -a --delete dist/ /var/www/opencast-player/
+sudo mkdir -p /var/www/opencast-xr
+sudo rsync -a --delete dist/ /var/www/opencast-xr/
 ```
 
 Server-Block anlegen, z. B. `/etc/nginx/conf.d/opencast-player.conf`:
@@ -162,7 +296,7 @@ server {
     listen 80;
     server_name player.example.org;
 
-    root /var/www/opencast-player;
+    root /var/www/opencast-xr;
     index index.html;
 
     location / {
@@ -171,31 +305,21 @@ server {
 }
 ```
 
-`try_files ... /index.html` ist ein SPA-Fallback: Der Player selbst
-verwendet aktuell kein clientseitiges Routing (keine URLs außer `/`), die
-Regel schadet aber nicht und macht das Deployment robust, falls künftige
-Versionen eigene Routen bekommen.
-
-Konfiguration testen und laden:
+`try_files $uri $uri/ /index.html;` ist derselbe SPA-Fallback wie beim
+Caddy-Weg. Konfiguration testen und laden:
 
 ```bash
 sudo nginx -t
 sudo systemctl reload nginx
 ```
 
-## 4. HTTPS (WebXR erfordert einen sicheren Kontext)
+### TLS: eigene Zertifikate oder certbot
 
-**WebXR-Sitzungen lassen sich nur in einem sicheren Kontext (HTTPS)
-starten.** Ohne gültiges TLS-Zertifikat funktioniert der „VR betreten“-
-Knopf im Player nicht (Browser verweigern den WebXR-API-Zugriff über
-Klartext-HTTP, `localhost` ausgenommen). Zwei gängige Wege:
-
-### Option A: Zertifikat der Universität / eigene CA
-
-Falls die Universität Osnabrück / virtUOS eigene Zertifikate ausstellt
-(z. B. über eine interne CA oder ein zentrales Zertifikatsmanagement),
-legen Sie das Zertifikat und den privaten Schlüssel an einem geschützten
-Pfad ab (z. B. `/etc/pki/tls/certs/player.example.org.crt` und
+**Option A — Zertifikat der Universität / eigene CA.** Falls die
+Universität Osnabrück / virtUOS eigene Zertifikate ausstellt (z. B. über
+eine interne CA oder ein zentrales Zertifikatsmanagement), legen Sie das
+Zertifikat und den privaten Schlüssel an einem geschützten Pfad ab (z. B.
+`/etc/pki/tls/certs/player.example.org.crt` und
 `/etc/pki/tls/private/player.example.org.key`, Rechte `600` für den
 Schlüssel) und erweitern Sie den Server-Block:
 
@@ -207,7 +331,7 @@ server {
     ssl_certificate     /etc/pki/tls/certs/player.example.org.crt;
     ssl_certificate_key /etc/pki/tls/private/player.example.org.key;
 
-    root /var/www/opencast-player;
+    root /var/www/opencast-xr;
     index index.html;
 
     location / {
@@ -222,14 +346,12 @@ server {
 }
 ```
 
-### Option B: Let's Encrypt via certbot
-
-Falls der Host von außen erreichbar ist und Let's Encrypt genutzt werden
-darf: `certbot` ist auf Rocky Linux 10 nicht Teil der Standard-Repositories,
-sondern kommt aus EPEL. EPEL zuerst aktivieren, dann `certbot`
-installieren (steht bei Ihnen bereits ein CRB/PowerTools-Repository
-aktiv, ist das ausreichend — falls `dnf install epel-release`
-Abhängigkeitsfehler meldet, zusätzlich
+**Option B — Let's Encrypt via certbot.** Falls der Host von außen
+erreichbar ist und Let's Encrypt genutzt werden darf: `certbot` ist auf
+Rocky Linux 10 nicht Teil der Standard-Repositories, sondern kommt aus
+EPEL. EPEL zuerst aktivieren, dann `certbot` installieren (steht bei
+Ihnen bereits ein CRB/PowerTools-Repository aktiv, ist das ausreichend —
+falls `dnf install epel-release` Abhängigkeitsfehler meldet, zusätzlich
 `sudo dnf config-manager --set-enabled crb` ausführen):
 
 ```bash
@@ -241,7 +363,8 @@ sudo certbot --nginx -d player.example.org
 `certbot` schreibt die `ssl_certificate`-Zeilen selbst in den
 Server-Block und richtet die HTTP→HTTPS-Weiterleitung ein; die
 automatische Erneuerung läuft über den vom Paket installierten Systemd-Timer
-(`sudo systemctl status certbot-renew.timer`).
+(`sudo systemctl status certbot-renew.timer`) — anders als bei Caddy ist
+das ein zusätzlicher, separat zu überwachender Baustein.
 
 Nach jeder Änderung erneut testen und laden:
 
@@ -253,16 +376,17 @@ sudo systemctl reload nginx
 ## 5. SELinux
 
 Rocky Linux 10 läuft standardmäßig mit SELinux im `enforcing`-Modus
-(prüfbar mit `getenforce`). Liegt der Webroot **nicht** unter dem von
-nginx erwarteten Standardkontext (z. B. weil er nicht unter `/var/www/`
-liegt oder Dateien per `rsync` von einem anderen Kontext kopiert wurden),
-blockiert SELinux das Ausliefern der Dateien.
+(prüfbar mit `getenforce`). Liegt der Webroot **nicht** unter dem vom
+jeweiligen Webserver erwarteten Standardkontext (z. B. weil er nicht
+unter `/var/www/` liegt oder Dateien per `rsync` von einem anderen
+Kontext kopiert wurden), kann SELinux das Ausliefern der Dateien
+blockieren.
 
-Wurde der oben verwendete Pfad `/var/www/opencast-player` genutzt, reicht
+Wurde der oben verwendete Pfad `/var/www/opencast-xr` genutzt, reicht
 in der Regel ein einmaliges Neu-Labeln nach dem ersten Kopieren:
 
 ```bash
-sudo restorecon -Rv /var/www/opencast-player
+sudo restorecon -Rv /var/www/opencast-xr
 ```
 
 Liegt der Webroot an einem anderen Ort außerhalb des Standard-`httpd`-
@@ -270,14 +394,33 @@ Baums, muss der Kontext dauerhaft registriert werden, bevor
 `restorecon` ihn anwenden kann:
 
 ```bash
-sudo semanage fcontext -a -t httpd_sys_content_t "/pfad/zu/opencast-player(/.*)?"
-sudo restorecon -Rv /pfad/zu/opencast-player
+sudo semanage fcontext -a -t httpd_sys_content_t "/pfad/zu/opencast-xr(/.*)?"
+sudo restorecon -Rv /pfad/zu/opencast-xr
 ```
 
 (`semanage` steht ggf. erst nach `sudo dnf install -y policycoreutils-python-utils`
 zur Verfügung.)
 
-Prüfen Sie im Fehlerfall (nginx liefert 403, obwohl die Dateirechte
+**Für nginx** ist das die vollständige Geschichte: nginx läuft auf
+RHEL-Derivaten als konfinierter Dienst und liest Webinhalte nur, wenn sie
+mit `httpd_sys_content_t` (oder einem verwandten Typ) beschriftet sind.
+
+**Für Caddy konnte ich nicht verifizieren**, ob das COPR-Paket eine
+eigene SELinux-Policy mitbringt und den Caddy-Prozess in eine konfinierte
+Domäne setzt, oder ob er unconfined läuft (dazu fand sich in der
+Caddy-/COPR-Dokumentation keine belastbare Aussage). Prüfen Sie das auf
+Ihrem System mit `ps -eZ | grep caddy`, nachdem der Dienst läuft:
+
+- Läuft Caddy in einer eigenen konfinierten Domäne, gilt dasselbe wie
+  für nginx — der Webroot muss passend beschriftet sein, und die
+  `restorecon`/`semanage`-Befehle oben greifen.
+- Läuft Caddy `unconfined_service_t` (unconfined), hat die Beschriftung
+  faktisch keine Wirkung, solange das so bleibt — sie schadet aber nicht
+  und macht das Deployment robust, falls eine spätere Paketversion Caddy
+  doch konfiniert. Deshalb wird sie hier für beide Wege gleichermaßen
+  empfohlen.
+
+Prüfen Sie im Fehlerfall (Webserver liefert 403, obwohl die Dateirechte
 passen) die Audit-Logs:
 
 ```bash
@@ -295,11 +438,14 @@ rpm -q firewalld || sudo dnf install -y firewalld
 sudo systemctl enable --now firewalld
 ```
 
-Der HTTPS-Dienst muss freigegeben werden (HTTP nur, falls Sie
-Klartext-HTTP dauerhaft mitbetreiben wollen — für WebXR reicht und genügt
-HTTPS):
+Beide Dienste — **http und https** — müssen freigegeben werden, nicht
+nur https: Port 80 wird für die Let's-Encrypt-HTTP-Challenge gebraucht
+(sowohl bei Caddys eingebautem ACME-Client als auch bei certbot) und für
+die automatische HTTP→HTTPS-Weiterleitung, die beide Webserver-Wege
+einrichten:
 
 ```bash
+sudo firewall-cmd --permanent --add-service=http
 sudo firewall-cmd --permanent --add-service=https
 sudo firewall-cmd --reload
 sudo firewall-cmd --list-services
@@ -324,8 +470,8 @@ verwendet wird. Ausgangspunkte:
 
 - Die aktuelle Opencast-Administrationsdokumentation zum Stichwort
   „CORS“ (Version des jeweiligen Opencast-Servers beachten).
-- Falls Opencast selbst hinter einem Reverse-Proxy (nginx/Apache) läuft,
-  der von der Opencast-Administration betrieben wird: Dort lässt sich
+- Falls Opencast selbst hinter einem Reverse-Proxy läuft, der von der
+  Opencast-Administration betrieben wird: Dort lässt sich
   `Access-Control-Allow-Origin` für die Player-Origin ergänzen, ohne
   Opencast selbst anzufassen.
 
@@ -343,10 +489,18 @@ git pull
 # falls er nicht als eigener Commit im Repository verwaltet wird.
 pnpm install
 pnpm build
-sudo rsync -a --delete dist/ /var/www/opencast-player/
-sudo restorecon -Rv /var/www/opencast-player
+sudo rsync -a --delete dist/ /var/www/opencast-xr/
+sudo restorecon -Rv /var/www/opencast-xr
 ```
 
-Ein Reload von nginx ist für ein reines Auswechseln statischer Dateien
-nicht nötig; die neue `index.html` und die neuen `assets/`-Dateien werden
-sofort beim nächsten Seitenaufruf ausgeliefert.
+Ein Reload des Webservers ist für ein reines Auswechseln statischer
+Dateien nicht nötig; die neue `index.html` und die neuen
+`assets/`-Dateien werden sofort beim nächsten Seitenaufruf ausgeliefert.
+Nur wenn Sie die Caddyfile oder den nginx-Server-Block selbst geändert
+haben, muss der jeweilige Dienst neu geladen werden:
+
+```bash
+sudo systemctl reload caddy    # Caddy-Weg
+# oder
+sudo systemctl reload nginx    # nginx-Weg
+```
