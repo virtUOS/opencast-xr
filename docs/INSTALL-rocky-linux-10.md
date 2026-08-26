@@ -8,7 +8,7 @@ eigenen Server-Prozess); ausgeliefert wird er über einen gewöhnlichen
 Webserver.
 
 Diese Anleitung beschreibt zwei Wege: **Caddy mit automatischem
-Let's-Encrypt-Zertifikat** (Abschnitt 3) als empfohlenen Standardweg, und
+Let's-Encrypt-Zertifikat** (Abschnitt 3) als empfohlenen Standardweg und
 **nginx + certbot** (Abschnitt 4) als Alternative für den Fall, dass
 bereits nginx-Infrastruktur oder eine Hausrichtlinie dafür existiert.
 **WebXR-Sitzungen lassen sich nur in einem sicheren Kontext (HTTPS)
@@ -162,12 +162,12 @@ zeigt, sowie **beide** Ports 80 (für die ACME-HTTP-Challenge und die
 automatische HTTP→HTTPS-Weiterleitung) und 443 (für HTTPS selbst) von
 außen erreichbar — siehe [firewalld](#6-firewalld). Ist der Host nicht
 öffentlich erreichbar (nur internes Netz, kein öffentlicher DNS-Eintrag),
-funktioniert automatisches Let's Encrypt nicht; in dem Fall entweder
-[Option A der nginx-Alternative](#4-alternative-nginx--certbot) (eigene
-Zertifikate/Universitäts-CA — dasselbe Vorgehen lässt sich auch auf
-Caddy übertragen, indem der Caddyfile-Site-Block statt automatischem TLS
-eine `tls <zertifikat> <schlüssel>`-Zeile mit den eigenen Dateien
-bekommt) oder gleich die nginx-Alternative verwenden.
+funktioniert automatisches Let's Encrypt nicht; in dem Fall entweder die
+Zertifikats-Option in [Abschnitt 4](#4-alternative-nginx--certbot)
+verwenden (eigene Zertifikate/Universitäts-CA — dasselbe Vorgehen lässt
+sich auch auf Caddy übertragen, indem der Caddyfile-Site-Block statt
+automatischem TLS eine `tls <zertifikat> <schlüssel>`-Zeile mit den
+eigenen Dateien bekommt) oder gleich die nginx-Alternative verwenden.
 
 ### Installation
 
@@ -182,16 +182,38 @@ sudo dnf install -y caddy
 ```
 
 **Nicht auf allen Minimal-Installationen vorhanden:** Meldet `dnf copr
-enable` „command not found“, fehlt das COPR-Plugin für dnf5. Nachrüsten
-mit `sudo dnf install -y dnf5-plugins` und den `copr enable`-Befehl
-danach erneut ausführen. `dnf copr` fragt beim ersten Aufruf interaktiv
-nach Bestätigung des Repository-GPG-Schlüssels — mit „y“ bestätigen.
+enable` „command not found“, fehlt das COPR-Plugin. Welches Paket das
+nachliefert, hängt davon ab, welche `dnf`-Generation auf dem System
+läuft — prüfen Sie das zuerst:
 
-**Diese beiden Schritte konnte ich nicht gegen einen echten Rocky-Linux-10-Server
-verifizieren**, nur gegen die aktuelle Dokumentation (siehe Quellen).
-Prüfen Sie vor einem Produktiv-Rollout mit `dnf info caddy`, ob das Paket
-nach `copr enable` tatsächlich auflösbar ist, und ziehen Sie im
-Zweifel die verlinkten Quellen zurate — Caddy-Paketierung für
+```bash
+dnf --version
+```
+
+Rocky Linux 10 setzt standardmäßig weiterhin auf das klassische DNF 4
+(wie RHEL/CentOS Stream 10) — dnf5 lässt sich zwar installieren, ist aber
+nicht die Voreinstellung. Je nach ausgegebener Hauptversion:
+
+```bash
+# dnf --version beginnt mit "4." (Standardfall auf Rocky Linux 10):
+sudo dnf install -y dnf-plugins-core
+
+# dnf --version beginnt mit "5." (dnf5 wurde installiert/aktiviert):
+sudo dnf install -y dnf5-plugins
+```
+
+Danach den `copr enable`-Befehl von oben erneut ausführen. `dnf copr`
+fragt beim ersten Aufruf interaktiv nach Bestätigung des
+Repository-GPG-Schlüssels — mit „y“ bestätigen.
+
+**Die EPEL-Aktivierung und das COPR-Repository für Caddy konnte ich
+nicht gegen einen echten Rocky-Linux-10-Server verifizieren**, nur gegen
+die aktuelle Dokumentation (siehe Quellen); auch die Aussage, dass Rocky
+Linux 10 standardmäßig DNF 4 statt dnf5 mitbringt, stammt aus der
+Release-Dokumentation, nicht aus einem Test auf einer laufenden
+Maschine. Prüfen Sie vor einem Produktiv-Rollout mit `dnf info caddy`,
+ob das Paket nach `copr enable` tatsächlich auflösbar ist, und ziehen
+Sie im Zweifel die verlinkten Quellen zurate — Caddy-Paketierung für
 RHEL-Derivate ändert sich gelegentlich.
 
 ```bash
