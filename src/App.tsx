@@ -280,7 +280,16 @@ export function App() {
         <XR store={xrStore}>
           <WindowShell
             radius={SHELL_RADIUS}
-            curved={false}
+            // Curved is the default player mode now ("Können wir curved noch
+            // zum default machen?") - windows and the dock are drawn bent
+            // onto the shell sphere from the first frame. The dock's own
+            // three-dot menu still has the Curved/Flat row (sphere-shell's
+            // `useCurved`/`setCurved`), so a viewer can drop back to flat at
+            // runtime; that toggle is entirely library behavior and untouched
+            // here. See `DockTransport.tsx`'s doc comment for the one
+            // consequence of this flip: timeline-scrub accuracy under curved
+            // mode is a known, tracked limitation, not a new bug.
+            curved
             // „Taste A und X für Play/Pause. Taste B dann zum Neuzentrieren."
             // The right controller has exactly two face buttons, and the
             // library's default binds A to a hold-to-recenter — so taking A for
