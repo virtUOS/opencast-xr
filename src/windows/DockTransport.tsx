@@ -436,16 +436,21 @@ function IconButton({
  * from "no hit at all" during quick manual testing. There is no depth
  * constraint on this component's JSX; nest the track however reads best.
  *
- * ## KNOWN LIMITATION: scrubbing is flat-plane-only, wrong under EXPERIMENTAL curved mode
+ * ## KNOWN LIMITATION: scrubbing is flat-plane-only, wrong under curved mode
  *
- * (Code review round 2.) The dock participates in sphere-shell's
- * EXPERIMENTAL cylindrical bend (`Dock.tsx` calls `useCylindricalBend` on its
- * own group, and its in-scene "Curved" toggle can turn it on at runtime
- * regardless of `App.tsx`'s initial `curved` prop to `<WindowShell>`) - and
- * `rayToTrackFraction` always intersects the real ray against the track's
- * FLAT `matrixWorld` plane, with no bend correction. That is CORRECT for the
- * default, shipped, hardware-validated flat mode (`curved={false}`), where
- * there is no bend to correct for. It is WRONG whenever the dock is curved.
+ * (Code review round 2; re-checked when curved became the default - see
+ * `App.tsx`'s `curved` prop, „Können wir curved noch zum default machen?".)
+ * The dock participates in sphere-shell's EXPERIMENTAL cylindrical bend
+ * (`Dock.tsx` calls `useCylindricalBend` on its own group; its in-scene
+ * "Curved" toggle can also flip curvature at runtime independent of
+ * `App.tsx`'s prop, in either direction) - and `rayToTrackFraction` always
+ * intersects the real ray against the track's FLAT `matrixWorld` plane, with
+ * no bend correction. That is exact whenever the dock is actually rendered
+ * flat (still reachable any time via the dock's own Curved/Flat row - a
+ * `curved` prop of `true` is only the INITIAL state, and `curvedAvailable`
+ * can force flat regardless of the prop, see below). It is WRONG whenever
+ * the dock is rendered curved, which since this round is the common case,
+ * not the exception.
  *
  * This is a **regression for a plain click specifically** versus the
  * pre-round-1 code, which read `e.point`: uikit's own hit-testing
@@ -486,13 +491,47 @@ function IconButton({
  * `.superpowers/sdd/2026-08-23-opencast-player/task-13-report.md` for the
  * exact missing-API proposal.
  *
- * **Practical effect today:** in flat mode (default), scrubbing is exact.
- * In curved mode, a click/drag still moves the fill and seeks in the right
- * DIRECTION and stays monotonic, but the landed time is off by an amount
- * that grows with how far the track sits from the dock's own azimuthal
- * centre and with the bend angle - most noticeable near the track's own
- * edges. Not a crash, not a stuck/frozen preview (that specific bug is
- * fixed) - a `curved`-only numeric inaccuracy.
+ * **Re-checked, not re-litigated, for the curved-default round.** Curved
+ * becoming the default (`App.tsx`) raises the stakes of this gap but does not
+ * change its shape, so before shipping the flip this was re-verified against
+ * sphere-shell 0.3.0's actual installed exports
+ * (`node_modules/sphere-shell/dist/index.d.ts`) rather than assumed stale:
+ * `ShellContextValue` is still exactly `{ store, anchorRef, requestRecenter,
+ * registerRecenterHandler }`, `WindowStoreState` carries `curved`/
+ * `curvedAvailable`/`config` but nothing dock-shaped, and the package's own
+ * export list (`bendPoint`, `unbendX`, `flatXForBentX`,
+ * `bentHalfExtentDegrees`, `bendRadiusPx(FromWidth)`, `useCylindricalBend`,
+ * `useCurved`/`useCurvedAvailable`, ...) has no member that reaches the
+ * dock's bend group, its `matrixWorld`, or this track's live offset inside
+ * it. Those geometry helpers are exactly the right primitives for the
+ * correction (`flatXForBentX(x, R) = R·tan(x/R)` is precisely the map from
+ * "true arc offset" to "what `rayToTrackFraction` reports today", so the fix
+ * is its inverse, `x = R·atan(x_flat/R)`) - the missing piece is not the
+ * math, it is a live handle on `R` and the dock-local origin `x` must be
+ * measured from. **Still `NEEDS_LIBRARY_API`**: the smallest export that
+ * would close this is a hook like `useDockBendFrame()` returning the dock's
+ * bend group `RefObject<Object3D>` (or its live `matrixWorld` + bend
+ * `radius`) from inside `dockControls`, mirroring what a plain `Window`
+ * already gets by being the group `useCylindricalBend` was called on.
+ *
+ * One more trap worth naming for whoever picks this up: the hit math must
+ * follow the RENDERED bend, not the nominal `curved` prop -
+ * `curvedAvailable` (`WindowStoreState`, sphere-shell's `index.d.ts` around
+ * its own `curved`/`curvedAvailable` fields) can force flat rendering even
+ * while `curved` itself still reads `true`, and `setCurved(true)` is a no-op
+ * once that happens - so `curved` in the store already tracks the RENDERED
+ * state (it is refused rather than stored when unavailable), and that is the
+ * flag a future fix must branch on, not `App.tsx`'s initial prop.
+ *
+ * **Practical effect today:** curved is now the default, shipped mode
+ * (`App.tsx`), and this is where the inaccuracy now actually bites: a
+ * click/drag still moves the fill and seeks in the right DIRECTION and stays
+ * monotonic, but the landed time is off by an amount that grows with how far
+ * the track sits from the dock's own azimuthal centre and with the bend
+ * angle - most noticeable near the track's own edges, worst case on the
+ * order of ~6.4% of the full timeline. Not a crash, not a stuck/frozen
+ * preview (that specific bug is fixed) - a numeric inaccuracy, and flat mode
+ * (still one click away via the dock's own Curved/Flat row) remains exact.
  */
 export function DockTransport({
   store,
