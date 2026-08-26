@@ -26,6 +26,10 @@ if [[ ! -f "$CONFIG_FILE" ]]; then
 OPENCAST_URL="https://opencast.example.org"
 # Zielverzeichnis des Webservers (Caddy/nginx "root"):
 WEBROOT="/var/www/opencast-xr"
+# Node-Heap für den Build in MB. Auf kleinen VMs setzt Node sein Limit
+# sonst zu niedrig an und der Build bricht mit "heap out of memory" ab.
+# Nicht höher setzen, als die VM an freiem RAM hat (siehe: free -h).
+NODE_HEAP_MB=2048
 EOF
   echo "Erstaufruf: $CONFIG_FILE wurde angelegt."
   echo "Bitte OPENCAST_URL und WEBROOT dort eintragen und das Skript erneut starten."
@@ -69,8 +73,8 @@ fi
 echo "==> Abhängigkeiten (lockfile-treu)"
 pnpm install --frozen-lockfile
 
-echo "==> Build"
-pnpm build
+echo "==> Build (Node-Heap: ${NODE_HEAP_MB:-2048} MB)"
+NODE_OPTIONS="--max-old-space-size=${NODE_HEAP_MB:-2048}" pnpm build
 
 echo "==> Nach $WEBROOT synchronisieren"
 sudo mkdir -p "$WEBROOT"
