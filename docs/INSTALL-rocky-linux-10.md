@@ -54,18 +54,21 @@ eine andere Node-Hauptversion umstellt), installieren Sie stattdessen
 erlauben, eine bestimmte Node-Hauptversion unabhängig vom
 AppStream-Paket zu wählen.
 
-### pnpm über Corepack
+### pnpm
 
 Das Projekt pinnt den Paketmanager über `packageManager` in der
-Root-`package.json` auf `pnpm@10.4.1`. Corepack ist ab Node 16.9 im
-Node-Lieferumfang enthalten und aktiviert die passende pnpm-Version
-automatisch:
+Root-`package.json` auf `pnpm@10.4.1`. Die offiziellen Node-Builds
+brächten dafür Corepack mit — **das Rocky-/RHEL-RPM liefert Corepack
+jedoch nicht aus** (`corepack: command not found`). Installieren Sie
+pnpm deshalb über das mitgelieferte npm:
 
 ```bash
-sudo corepack enable
-corepack prepare pnpm@10.4.1 --activate
+sudo npm install -g pnpm@10.4.1
 pnpm --version
 ```
+
+(Alternativ funktioniert jeder `pnpm`-Aufruf in dieser Anleitung auch
+ohne globale Installation als `npx pnpm@10.4.1 …`.)
 
 ### git
 
