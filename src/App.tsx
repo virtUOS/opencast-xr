@@ -7,12 +7,20 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Canvas } from '@react-three/fiber'
 import { XR } from '@react-three/xr'
 import { useStore } from 'zustand'
-import { WindowShell } from 'sphere-shell'
+import { WindowShell, type AppDockMenuItem } from 'sphere-shell'
 import { SHELL_RADIUS, xrStore } from './xrStore'
 import { VerificationHandle } from './verificationHandle'
 import { OpencastClient } from './opencast/client'
 import { captionPrefsStorage, readCaptionPrefs, writeCaptionPrefs } from './captionPrefs'
-import { availableBackground, backgroundColorFor, sessionModeFor, type BackgroundMode } from './backgroundMode'
+import {
+  availableBackground,
+  backgroundColorFor,
+  backgroundToggleAvailable,
+  backgroundToggleLabel,
+  otherBackground,
+  sessionModeFor,
+  type BackgroundMode,
+} from './backgroundMode'
 import { backgroundPrefsStorage, readBackgroundPrefs, writeBackgroundPrefs } from './backgroundPrefs'
 import { createPlayerStore } from './player/store'
 import { LibraryWindow } from './windows/LibraryWindow'
@@ -244,6 +252,73 @@ export function App() {
     })
   }, [effectiveBackground])
 
+  /**
+   * The dock's own background row (sphere-shell 0.3.1's `dockMenuItems` /
+   * `AppDockMenuItem` API - see `backgroundMode.ts`'s doc comment for why
+   * this was previously scoped to the start overlay alone). Label names the
+   * SWITCH TARGET (`backgroundToggleLabel`), so „what happens if I press
+   * this" always has one answer.
+   *
+   * ## Why `onSelect` ENDS the session rather than re-entering the other mode directly
+   *
+   * A background switch is a SESSION MODE switch (`immersive-vr` <->
+   * `immersive-ar` - see `sessionModeFor`), and WebXR does not allow a second
+   * immersive session while one is active. The installed
+   * `@pmndrs/xr@6.6.30`'s `enterAR()`/`enterVR()` (`xrStore.ts`'s own import)
+   * just call `navigator.xr.requestSession(mode, ...)` with no guard of their
+   * own (`node_modules/.pnpm/@pmndrs+xr@.../dist/store.js`'s
+   * `enterXRSession`), so calling either while a session is running rejects
+   * per the WebXR spec, which refuses a second concurrent immersive session
+   * outright. The store's own `destroy()` doc comment names the sanctioned
+   * way out - "for exiting XR use store.getState().session?.end())" - and
+   * there is no combined "end and re-enter" helper anywhere in the installed
+   * 0.3.1 `.d.ts` or `@pmndrs/xr` source.
+   *
+   * A chained `await session.end(); await xrStore.enterAR()` was considered
+   * and rejected: `requestSession` requires "transient activation" from a
+   * user gesture, and while the click that opens this menu row IS one,
+   * `session.end()` is itself async - it does real teardown work before its
+   * promise resolves - and whether that gap preserves the gesture's
+   * activation on real Quest Browser hardware is a spec grey area this repo
+   * has no way to verify (no headset, no sudo for a live WebXR check here -
+   * see the task's own gate on that). Ending the session and leaving
+   * re-entry to the overlay is the variant defensible from the installed
+   * `.d.ts`/source alone: `session.end()` is exactly what the library
+   * documents, the overlay already reads the FLIPPED preference
+   * (`chooseBackground` below runs before the `end()` call), and the user
+   * lands one clearly-labelled click away from the mode they just asked for
+   * - see `enterVR` above and the radios' `checked` state.
+   *
+   * Outside a session (browse mode, or a magic-window desktop/tablet visit -
+   * see sphere-shell's README on why that is not a degraded fallback path)
+   * `xrStore.getState().session` is `undefined`, so this only flips the
+   * persisted preference for the next start - exactly the „outside a
+   * session the row still works" requirement.
+   */
+  const chooseBackgroundRow = useCallback(() => {
+    chooseBackground(otherBackground(effectiveBackground))
+    xrStore.getState().session?.end()
+  }, [effectiveBackground, chooseBackground])
+
+  // Hidden rather than shown-disabled: `AppDockMenuItem` has no `enabled`
+  // field (unlike the shell's own built-in rows - see sphere-shell's
+  // `AppDockMenuItem` doc comment, which explicitly rules out inventing a
+  // disabled affordance for app rows), so there is no way to grey this row
+  // out in place. `black` is always reachable, so this only ever hides the
+  // switch-to-passthrough row on a device with no `immersive-ar` support -
+  // reusing `availableBackground` via `backgroundToggleAvailable` rather than
+  // re-deriving that fallback rule a second time.
+  const dockMenuItems = useMemo<AppDockMenuItem[]>(() => {
+    if (!backgroundToggleAvailable(effectiveBackground, arAvailable)) return []
+    return [
+      {
+        id: 'background',
+        label: backgroundToggleLabel(effectiveBackground),
+        onSelect: chooseBackgroundRow,
+      },
+    ]
+  }, [effectiveBackground, arAvailable, chooseBackgroundRow])
+
   return (
     <div style={{ position: 'absolute', inset: 0 }}>
       <div style={{ position: 'absolute', zIndex: 1, padding: 8, display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -395,6 +470,13 @@ export function App() {
             // the library's deliberate guard against a brushed thumb throwing
             // the whole shell to a new position and yaw.
             recenterButton="b-button"
+            // The background row - see `chooseBackgroundRow`'s doc comment.
+            // Present in BOTH modes (browse and player), unlike
+            // `dockControls` below: the dock's three-dot menu exists
+            // regardless of mode, and the background choice is meaningful in
+            // either one (a viewer can switch it while still browsing, before
+            // any episode is open).
+            dockMenuItems={dockMenuItems}
             // Player mode only ("Browse mode shows no transport", Task 13's
             // brief) - undefined rather than an empty fragment while
             // browsing, so the dock renders its own default
