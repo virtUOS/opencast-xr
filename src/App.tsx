@@ -214,9 +214,10 @@ export function App() {
   }, [])
 
   // What is behind the windows once a session starts. 'black' (the player's
-  // original, and only, look) is the default, chosen on the start overlay -
-  // see `backgroundMode.ts` for why this is scoped to that overlay and not
-  // wired into an in-session toggle yet. Survives a reload via
+  // original, and only, look) is the default, chosen on the start overlay or
+  // flipped from the dock's three-dot menu (see `chooseBackgroundRow` below -
+  // the in-session row ends the session, since the mode is a property of the
+  // session type and cannot change within one). Survives a reload via
   // `backgroundPrefs.ts`, same defensive try/catch contract as
   // `captionPrefs.ts`, in the same `opencastxr.player.*` key family - lazily
   // read once, on mount, exactly like the caption prefs' own `useEffect`
