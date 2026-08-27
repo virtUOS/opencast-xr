@@ -70,6 +70,96 @@ export function rayToTrackFraction(
   return clampFraction(hit.x + 0.5)
 }
 
+/**
+ * The curved-mode counterpart to `rayToTrackFraction` - corrects for the
+ * dock's cylindrical bend (sphere-shell 0.3.1's `useDockBendFrame`; see the
+ * README's "Curved windows (experimental)" section for the worked recipe this
+ * implements, and `DockTransport.tsx`'s doc comment, formerly a KNOWN
+ * LIMITATION, for the discrepancy this closes).
+ *
+ * ## Why this needs the DOCK's bend frame, not just the track's own
+ *
+ * `rayToTrackFraction` above intersects the ray against the track's FLAT
+ * plane and reads the hit in the TRACK's own local frame - exact in flat
+ * mode, because the track's `Object3D` transform (`trackMatrixWorld`) is
+ * never touched by the bend (only the drawn geometry is, per-vertex, in a
+ * patched material - see sphere-shell's "It works by patching uikit's
+ * materials"). In curved mode that same flat-plane intersection is exactly
+ * what uikit's own flat hit-test would report too: a position systematically
+ * displaced OUTWARD from what the viewer is actually looking at
+ * (`flatXForBentX`'s doc comment derives the displacement,
+ * `R·(tan k − k)`, positive and growing with the offset). The correction has
+ * to run in the DOCK's own coordinate frame - not the track's - because the
+ * cylinder's axis is the dock's vertical axis (`useDockBendFrame`'s `group`),
+ * and the bend distorts a point's distance from THAT axis, not from the
+ * track's own centre.
+ *
+ * ## The steps, matching the README's recipe exactly
+ *
+ * 1. Flat-plane hit, in WORLD space - identical to `rayToTrackFraction`'s own
+ *    first step (same plane, same ray-intersect call).
+ * 2. That hit, and the track's own left/right edges (`local x = ∓0.5` in the
+ *    track's frame, carried to world via `trackMatrixWorld`), all converted
+ *    into the bend group's local frame via `worldToLocal` - the codebase's
+ *    established idiom (`useDragOnSphere.ts`), in METRES.
+ * 3. Metres -> uikit layout PIXELS via `pixelSize`, the unit `bendRadiusPx`
+ *    is expressed in - mixing metres with the pixel radius is exactly the
+ *    silent-6.4%-error trap `useDockBendFrame`'s doc comment warns about.
+ * 4. The inverse bend, `x_true = R·atan(x_flat / R)`, applied ONLY to the hit
+ *    - the track's edges are the track's own AUTHORED (unbent) layout
+ *    position, which - because the bend preserves arc length - already IS
+ *    its true position on the cylinder; only a flat-plane RAY INTERSECTION
+ *    picks up the `tan` displacement `flatXForBentX` describes, so only the
+ *    hit needs undoing.
+ * 5. The corrected hit interpolated between the (uncorrected) edges gives the
+ *    fraction, exactly as `rayToTrackFraction`'s own `hit.x + 0.5` does for
+ *    the flat case - `clampFraction` handles a hit past either edge the same
+ *    way.
+ *
+ * Falls back to `null` (never throws) when the flat-plane ray misses, when
+ * the track has collapsed to zero width in the bend frame (not yet laid out
+ * - the same "no new information this event" contract `rayToTrackFraction`
+ * documents), or when `bendRadiusPx` is not a finite positive number (should
+ * be unreachable whenever `useDockBendFrame().curved` is true, but a
+ * division by a bad radius must not produce `NaN`/`Infinity` fractions).
+ *
+ * `dockTransport.tsx` only calls this when `useDockBendFrame().curved` is
+ * true and its `group`/`bendRadiusPx`/`pixelSize` are non-null; the flat path
+ * (`rayToTrackFraction`) stays untouched and byte-identical for every other
+ * case, including the frame-null fallback.
+ */
+export function rayToTrackFractionCurved(
+  origin: Vector3,
+  direction: Vector3,
+  trackMatrixWorld: Matrix4,
+  bendGroupMatrixWorld: Matrix4,
+  bendRadiusPx: number,
+  pixelSize: number,
+): number | null {
+  if (!Number.isFinite(bendRadiusPx) || bendRadiusPx <= 0) return null
+  if (!Number.isFinite(pixelSize) || pixelSize <= 0) return null
+
+  const localPlane = new Plane(new Vector3(0, 0, 1), 0)
+  const worldPlane = localPlane.applyMatrix4(trackMatrixWorld)
+  const ray = new Ray(origin, direction)
+  const hit = new Vector3()
+  if (!ray.intersectPlane(worldPlane, hit)) return null
+
+  const groupInverse = bendGroupMatrixWorld.clone().invert()
+  const leftLocal = new Vector3(-0.5, 0, 0).applyMatrix4(trackMatrixWorld).applyMatrix4(groupInverse)
+  const rightLocal = new Vector3(0.5, 0, 0).applyMatrix4(trackMatrixWorld).applyMatrix4(groupInverse)
+  const hitLocal = hit.applyMatrix4(groupInverse)
+
+  const leftPx = leftLocal.x / pixelSize
+  const rightPx = rightLocal.x / pixelSize
+  if (rightPx === leftPx) return null // track not laid out yet - zero width in the bend frame
+
+  const hitFlatPx = hitLocal.x / pixelSize
+  const hitTruePx = bendRadiusPx * Math.atan(hitFlatPx / bendRadiusPx)
+
+  return clampFraction((hitTruePx - leftPx) / (rightPx - leftPx))
+}
+
 /** The drag gesture's own state - which pointer (if any) is currently dragging, and the last fraction it reported. */
 export interface DragState {
   dragging: boolean

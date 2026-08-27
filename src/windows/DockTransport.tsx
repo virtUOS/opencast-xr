@@ -23,7 +23,13 @@ import {
   Volume2,
   VolumeX,
 } from '@react-three/uikit-lucide'
-import { DECORATIVE_POINTER_EVENTS, HoverLabel, useShellStore, useWindowState } from 'sphere-shell'
+import {
+  DECORATIVE_POINTER_EVENTS,
+  HoverLabel,
+  useDockBendFrame,
+  useShellStore,
+  useWindowState,
+} from 'sphere-shell'
 import type { PlayerStoreApi } from '../player/store'
 import type { SeriesStateApi } from './seriesState'
 import {
@@ -61,6 +67,7 @@ import {
   type DragState,
   initialDragState,
   rayToTrackFraction,
+  rayToTrackFractionCurved,
   reduceDrag,
 } from './timelineDrag'
 
@@ -436,102 +443,62 @@ function IconButton({
  * from "no hit at all" during quick manual testing. There is no depth
  * constraint on this component's JSX; nest the track however reads best.
  *
- * ## KNOWN LIMITATION: scrubbing is flat-plane-only, wrong under curved mode
+ * ## CLOSED: exact curved-mode scrubbing via sphere-shell 0.3.1's `useDockBendFrame()`
  *
- * (Code review round 2; re-checked when curved became the default - see
- * `App.tsx`'s `curved` prop, „Können wir curved noch zum default machen?".)
- * The dock participates in sphere-shell's EXPERIMENTAL cylindrical bend
+ * (Was a KNOWN LIMITATION through the curved-default round; closed once the
+ * library shipped the missing API this doc comment used to ask for.) The
+ * dock participates in sphere-shell's EXPERIMENTAL cylindrical bend
  * (`Dock.tsx` calls `useCylindricalBend` on its own group; its in-scene
- * "Curved" toggle can also flip curvature at runtime independent of
- * `App.tsx`'s prop, in either direction) - and `rayToTrackFraction` always
- * intersects the real ray against the track's FLAT `matrixWorld` plane, with
- * no bend correction. That is exact whenever the dock is actually rendered
- * flat (still reachable any time via the dock's own Curved/Flat row - a
- * `curved` prop of `true` is only the INITIAL state, and `curvedAvailable`
- * can force flat regardless of the prop, see below). It is WRONG whenever
- * the dock is rendered curved, which since this round is the common case,
- * not the exception.
+ * "Curved"/"Flat" row can flip curvature at runtime independent of
+ * `App.tsx`'s `curved` prop, in either direction), and a flat-plane ray/track
+ * intersection alone - `rayToTrackFraction` - is only exact while the dock is
+ * actually rendered flat. Under curved rendering it is off by
+ * `R·(tan k − k)` (`flatXForBentX`'s derivation), growing with the offset
+ * from the dock's own bend axis - worst case on the order of ~6.4% of the
+ * full timeline near a track's edge.
  *
- * This is a **regression for a plain click specifically** versus the
- * pre-round-1 code, which read `e.point`: uikit's own hit-testing
- * (`patchRaycastForBend` in sphere-shell) substitutes a bend-corrected ray
- * before calling the stock flat-quad raycast, so the `Intersection.point` it
- * records IS already bend-corrected - accurate for a plain click. But that
- * substitution is undone (the real ray's direction is restored) in a
- * `finally` block before any handler runs, specifically so `e.ray` stays the
- * TRUE, uncorrected ray for everyone else - which is exactly the field this
- * component now reads, for the unrelated (and more serious) reason that
- * `e.point` freezes solid during a pointer-captured drag (see
- * `timelineDrag.ts`). There is no reading of `e.ray`/`e.point` that is
- * simultaneously bend-aware AND capture-safe without doing the bend math
- * ourselves - which is exactly what a proper fix needs to do.
+ * **The fix.** sphere-shell 0.3.1 added `useDockBendFrame()`, exactly the
+ * export this doc comment used to ask for: called from `dockControls` (this
+ * component), it hands back the dock's own live bend group, its bend radius
+ * in both metres and uikit layout pixels, `pixelSize` (the conversion factor
+ * between them), and `curved` - the dock's RENDERED state, not the nominal
+ * prop, derived together with the other four fields in one `useMemo` so they
+ * can never disagree (see the hook's own doc comment and the README's
+ * "Curved windows (experimental)" section for the worked recipe). `resolveFraction`
+ * above reads it once per pointer event and, whenever `bendFrame.curved` is
+ * true and its group has mounted, calls `rayToTrackFractionCurved`
+ * (`timelineDrag.ts`) instead of the flat `rayToTrackFraction` - which
+ * intersects the same flat plane (the flat-plane hit is still exactly what a
+ * real ray aimed at the curved surface reports, per the README's derivation)
+ * and then undoes the bend, `x_true = R·atan(x_flat / R)`, in the SAME unit
+ * (`bendRadiusPx` in pixels) the track's own width is laid out in, before
+ * turning the corrected offset into a fraction between the track's own
+ * (bend-invariant, since bending preserves arc length) edges. See
+ * `rayToTrackFractionCurved`'s own doc comment in `timelineDrag.ts` for the
+ * full step-by-step and why the correction has to run in the DOCK's frame,
+ * not the track's own.
  *
- * **Why it isn't fixed here.** A correct fix means intersecting `e.ray`
- * against the actual CYLINDER the dock is bent onto (the analogue of
- * `useDragOnSphere` intersecting the shell sphere) and mapping the hit back
- * to this track's own local X. That cylinder's axis and radius are defined
- * in the DOCK's own bend-group local frame (`Dock.tsx`'s internal
- * `groupRef`, fed to `useCylindricalBend` - NOT the shell's `anchorRef`,
- * which is a different, unrotated ancestor: the dock sits at its own
- * `panelTransform({azimuth: 0, elevation: DOCK_ELEVATION}, ...)` offset from
- * the anchor, and a nonzero elevation TILTS the dock's local Y away from the
- * anchor's/world's vertical - so building the cylinder from `anchorRef`
- * alone would use the wrong axis orientation). Nothing sphere-shell exports
- * today reaches that group, its `matrixWorld`, or the live `BendUniforms`
- * `useCylindricalBend` computes for it, from code rendered inside the
- * `dockControls` slot - `useShellContext()` exposes only `anchorRef`, and
- * the dock's own bend transform is private to `Dock.tsx`. Reconstructing it
- * by duplicating `Dock.tsx`'s private layout constants would ALSO still be
- * short one more unknown - this track's own horizontal offset within the
- * dock's flex row, which depends on the live widths of every tile/button
- * to its left and cannot be derived without literally re-running uikit's
- * flex layout. Flagged to the task's controller as `NEEDS_CONTEXT` rather
- * than shipped as a silent approximation; see `docs/UIKIT-NOTES.md` entry 4
- * for the full ray-vs-point-vs-bend story and
- * `.superpowers/sdd/2026-08-23-opencast-player/task-13-report.md` for the
- * exact missing-API proposal.
+ * Flat mode is untouched: `resolveFraction` falls back to the exact,
+ * unchanged `rayToTrackFraction` whenever `bendFrame.curved` is false (flat
+ * rendering, or `curvedAvailable` having forced it off under the app) or the
+ * bend group hasn't mounted yet, so nothing about the flat path's behaviour
+ * or its own tests changed.
  *
- * **Re-checked, not re-litigated, for the curved-default round.** Curved
- * becoming the default (`App.tsx`) raises the stakes of this gap but does not
- * change its shape, so before shipping the flip this was re-verified against
- * sphere-shell 0.3.0's actual installed exports
- * (`node_modules/sphere-shell/dist/index.d.ts`) rather than assumed stale:
- * `ShellContextValue` is still exactly `{ store, anchorRef, requestRecenter,
- * registerRecenterHandler }`, `WindowStoreState` carries `curved`/
- * `curvedAvailable`/`config` but nothing dock-shaped, and the package's own
- * export list (`bendPoint`, `unbendX`, `flatXForBentX`,
- * `bentHalfExtentDegrees`, `bendRadiusPx(FromWidth)`, `useCylindricalBend`,
- * `useCurved`/`useCurvedAvailable`, ...) has no member that reaches the
- * dock's bend group, its `matrixWorld`, or this track's live offset inside
- * it. Those geometry helpers are exactly the right primitives for the
- * correction (`flatXForBentX(x, R) = R·tan(x/R)` is precisely the map from
- * "true arc offset" to "what `rayToTrackFraction` reports today", so the fix
- * is its inverse, `x = R·atan(x_flat/R)`) - the missing piece is not the
- * math, it is a live handle on `R` and the dock-local origin `x` must be
- * measured from. **Still `NEEDS_LIBRARY_API`**: the smallest export that
- * would close this is a hook like `useDockBendFrame()` returning the dock's
- * bend group `RefObject<Object3D>` (or its live `matrixWorld` + bend
- * `radius`) from inside `dockControls`, mirroring what a plain `Window`
- * already gets by being the group `useCylindricalBend` was called on.
+ * Verified independently, not just implementation-vs-itself:
+ * `timelineDrag.test.ts`'s `rayToTrackFractionCurved` suite constructs a
+ * known fraction's TRUE 3D position via sphere-shell's own exported
+ * `bendPoint` (the library's forward bend map), builds a real ray from the
+ * anchor through it, intersects that ray against the flat track plane by
+ * hand, and confirms `rayToTrackFractionCurved` recovers the original
+ * fraction - across an identity bend group, a translated/scaled one, a
+ * non-1 `pixelSize`, and a near-edge fraction - without ever calling the
+ * `Math.atan` correction the production code itself uses to derive its
+ * expectations.
  *
- * One more trap worth naming for whoever picks this up: the hit math must
- * follow the RENDERED bend, not the nominal `curved` prop -
- * `curvedAvailable` (`WindowStoreState`, sphere-shell's `index.d.ts` around
- * its own `curved`/`curvedAvailable` fields) can force flat rendering even
- * while `curved` itself still reads `true`, and `setCurved(true)` is a no-op
- * once that happens - so `curved` in the store already tracks the RENDERED
- * state (it is refused rather than stored when unavailable), and that is the
- * flag a future fix must branch on, not `App.tsx`'s initial prop.
- *
- * **Practical effect today:** curved is now the default, shipped mode
- * (`App.tsx`), and this is where the inaccuracy now actually bites: a
- * click/drag still moves the fill and seeks in the right DIRECTION and stays
- * monotonic, but the landed time is off by an amount that grows with how far
- * the track sits from the dock's own azimuthal centre and with the bend
- * angle - most noticeable near the track's own edges, worst case on the
- * order of ~6.4% of the full timeline. Not a crash, not a stuck/frozen
- * preview (that specific bug is fixed) - a numeric inaccuracy, and flat mode
- * (still one click away via the dock's own Curved/Flat row) remains exact.
+ * The upstream, library-level limitations the README still names for curved
+ * mode remain out of this component's scope: hand/touch (`spherecast`)
+ * hit-testing is not bend-corrected (ray pointers, which is what this
+ * track's own pointer handlers are, are), and this fix does not change that.
  */
 export function DockTransport({
   store,
@@ -598,11 +565,39 @@ export function DockTransport({
   // preview's OWN store subscription already causes anyway.
   const dragStateRef = useRef<DragState>(initialDragState)
 
-  const resolveFraction = useCallback((e: ThreeEvent<PointerEvent>): number | null => {
-    const track = trackRef.current
-    if (!track) return null
-    return rayToTrackFraction(e.ray.origin, e.ray.direction, track.matrixWorld)
-  }, [])
+  // sphere-shell 0.3.1's own bend frame for THIS dock instance - see
+  // `rayToTrackFractionCurved`'s doc comment in `timelineDrag.ts` for what
+  // each field is and why the correction needs all of them together.
+  const bendFrame = useDockBendFrame()
+
+  const resolveFraction = useCallback(
+    (e: ThreeEvent<PointerEvent>): number | null => {
+      const track = trackRef.current
+      if (!track) return null
+      // `bendFrame.curved` is the dock's RENDERED state (not merely the prop
+      // `App.tsx` asked for - see `useDockBendFrame`'s own doc comment on why
+      // that distinction matters and why it can be trusted directly). Every
+      // other field is non-null exactly when this is true; the `?? null`
+      // guards are defensive only - `curved` and the rest are derived
+      // together in the library's own single `useMemo`, so they cannot
+      // actually disagree.
+      const group = bendFrame.group?.current
+      if (bendFrame.curved && group && bendFrame.bendRadiusPx != null && bendFrame.pixelSize != null) {
+        return rayToTrackFractionCurved(
+          e.ray.origin,
+          e.ray.direction,
+          track.matrixWorld,
+          group.matrixWorld,
+          bendFrame.bendRadiusPx,
+          bendFrame.pixelSize,
+        )
+      }
+      // Flat mode, or curved mode with no bend group mounted yet (the very
+      // first frame) - today's exact, unchanged math.
+      return rayToTrackFraction(e.ray.origin, e.ray.direction, track.matrixWorld)
+    },
+    [bendFrame],
+  )
 
   const applyEffects = useCallback(
     (effects: DragEffect[], e: ThreeEvent<PointerEvent>) => {
