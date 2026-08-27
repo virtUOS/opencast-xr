@@ -6,6 +6,7 @@ import {
   SIDE_ROW_GAP_DEG,
   SIDE_WIDTH_DEG,
   VIDEO_ASPECT,
+  libraryReturnTarget,
   streamErrorEscapeHint,
   streamWindowAction,
   videoWindowId,
@@ -24,20 +25,16 @@ describe('videoWindowId', () => {
 })
 
 describe('streamErrorEscapeHint', () => {
-  it('names the way out for the last open stream, whose window cannot be closed', () => {
+  it('names the way out for the last open stream: its own X now works (Task 4)', () => {
     const hint = streamErrorEscapeHint(false)
     expect(hint).not.toBeNull()
-    // The escape has to be NAMED, not implied: with the X vetoed and the
-    // reload button re-failing against the same URL, the dock's "Home" crumb
-    // is the only control that gets the user out of a permanently dead
-    // single-stream episode.
-    expect(hint).toContain('Home')
-    // ...and it must name a control that still EXISTS. The dock UX round
-    // replaced the old "Bibliothek" button with the breadcrumb's Home crumb,
-    // and this string went stale pointing at it - in the user's only way out
-    // of a dead stream. Asserted as an absence so the same drift fails loudly
-    // next time rather than shipping.
-    expect(hint).not.toContain('Bibliothek')
+    // The escape has to be NAMED, not implied. Unlike the OLD hint (which
+    // pointed at the dock's Home crumb, itself a fix for an earlier drift
+    // pointing at a removed "Bibliothek" button), this names the MECHANISM -
+    // the window's own X, which now exits to the library instead of being
+    // vetoed - rather than a separate control's label, so there is no second
+    // string to go stale the next time the dock's own UX moves.
+    expect(hint).toContain('X')
   })
 
   it('says nothing when another stream is still up', () => {
@@ -49,6 +46,28 @@ describe('streamErrorEscapeHint', () => {
     // Same constraint as LibraryWindow's BACK_LABEL: diacritics render, but
     // typographic punctuation comes out as tofu boxes.
     expect(streamErrorEscapeHint(false)).not.toMatch(/[‹›„“”…·—]/)
+  })
+})
+
+describe('libraryReturnTarget', () => {
+  it('returns to the series episode list when the episode has a series', () => {
+    expect(libraryReturnTarget({ seriesId: 's1', seriesTitle: 'Einführung in die Chaostheorie' })).toEqual({
+      kind: 'series',
+      sid: 's1',
+      title: 'Einführung in die Chaostheorie',
+    })
+  })
+
+  it('falls back to the series id when seriesTitle is missing - ugly but navigable, per breadcrumbTrail', () => {
+    expect(libraryReturnTarget({ seriesId: 's1', seriesTitle: undefined })).toEqual({
+      kind: 'series',
+      sid: 's1',
+      title: 's1',
+    })
+  })
+
+  it('returns the singles view for a series-less episode - it was never listed at level 1 directly', () => {
+    expect(libraryReturnTarget({ seriesId: undefined, seriesTitle: undefined })).toEqual({ kind: 'singles' })
   })
 })
 
@@ -177,8 +196,8 @@ describe('streamWindowAction', () => {
     expect(act({ shell: shellClosed, streamOpen: true })).toBe('close-stream')
   })
 
-  it('refuses to unload the last open stream and undoes the shell close instead', () => {
-    expect(act({ shell: shellClosed, streamOpen: true, canClose: false })).toBe('veto-close')
+  it('refuses to unload the last open stream and exits to the library instead', () => {
+    expect(act({ shell: shellClosed, streamOpen: true, canClose: false })).toBe('exit-to-library')
   })
 
   it('reopens the stream when the shell window came back (dock restore)', () => {
@@ -250,11 +269,8 @@ describe('streamWindowAction', () => {
   // every action makes the two states agree, so the FOLLOW-UP evaluation is
   // always 'none'. A comment cannot fail when someone changes a rule.
   describe('two-step sequences settle', () => {
-    it('veto-close then restore settles: no oscillation', () => {
-      expect(act({ shell: shellClosed, streamOpen: true, canClose: false })).toBe('veto-close')
-      // ...the hook called shellStore.restore(id), so the entry is open again
-      // while the stream never closed:
-      expect(act({ shell: shellOpen, streamOpen: true, canClose: false })).toBe('none')
+    it('exit-to-library is terminal, not a two-step settle: the hook tears the whole player down (toBrowse) rather than reconciling THIS window, so there is no follow-up state for it to converge to - see VideoWindows.tsx', () => {
+      expect(act({ shell: shellClosed, streamOpen: true, canClose: false })).toBe('exit-to-library')
     })
 
     it('close-stream then the closed state settles', () => {
@@ -274,7 +290,13 @@ describe('streamWindowAction', () => {
       // shell teardown) between the two evaluations. The entry is gone while
       // the store still says open - which must NOT read as "the shell closed
       // it", or teardown would unload streams behind the store's back.
-      expect(act({ shell: shellClosed, streamOpen: true, canClose: false })).toBe('veto-close')
+      //
+      // This is also exactly what happens for real after 'exit-to-library':
+      // the hook's `toBrowse` call empties `streams`, which unmounts this
+      // window and unregisters its shell entry - so the very next evaluation
+      // (if this hook instance still existed to run one) would see `shell:
+      // undefined` too.
+      expect(act({ shell: shellClosed, streamOpen: true, canClose: false })).toBe('exit-to-library')
       expect(act({ shell: undefined, streamOpen: true, canClose: false })).toBe('none')
       expect(act({ shell: shellClosed, streamOpen: true })).toBe('close-stream')
       expect(act({ shell: undefined, streamOpen: false })).toBe('none')

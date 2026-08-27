@@ -65,25 +65,32 @@ export function LibraryWindow({ store }: { store: PlayerStoreApi }) {
     void libraryStore.getState().loadSeries()
   }, [libraryStore])
 
-  // The dock breadcrumb's „Reihe" crumb: browse mode has to open at LEVEL 2,
-  // already scoped to that series, instead of at the series list. The intent
-  // arrives as the player store's one-shot `browseTarget` (see `BrowseTarget`
-  // in player/store.ts) because `toBrowse` runs before this window exists.
+  // Two producers of a one-shot `browseTarget` land here: the dock
+  // breadcrumb's „Reihe" crumb (`kind: 'series'`) and closing the LAST open
+  // video window (`kind: 'singles'` for a series-less recording, `'series'`
+  // for one with a series - `videoWindowState.ts`'s `libraryReturnTarget`).
+  // Both need browse mode to open at LEVEL 2 already scoped, instead of at
+  // the series list. The intent arrives as the player store's one-shot
+  // `browseTarget` (see `BrowseTarget` in player/store.ts) because `toBrowse`
+  // runs before this window exists.
   //
   // `consumeBrowseTarget` clears it as it reads, so a re-fired effect or a
-  // StrictMode double-invoke cannot enter the series twice (which would be a
-  // second, pointless page-1 fetch). `enterSeries` bumps `libraryState`'s own
-  // `episodesGeneration`, so this composes with the race-token discipline
-  // rather than sidestepping it: the level-1 `loadSeries` above runs
-  // concurrently and only ever writes `series`, and if the user navigates away
-  // before this fetch lands, its result is discarded like any other stale one.
+  // StrictMode double-invoke cannot enter the scope twice (which would be a
+  // second, pointless page-1 fetch). `enterSeries`/`enterSingles` bump
+  // `libraryState`'s own `episodesGeneration`, so this composes with the
+  // race-token discipline rather than sidestepping it: the level-1
+  // `loadSeries` above runs concurrently and only ever writes `series`, and
+  // if the user navigates away before this fetch lands, its result is
+  // discarded like any other stale one.
   //
   // Deliberately separate from the effect above rather than folded into it: the
   // series list still has to be loaded, because „< Zurück" from the scoped
   // level 2 goes to level 1 and must find it populated.
   useEffect(() => {
     const target = store.getState().consumeBrowseTarget()
-    if (target) void libraryStore.getState().enterSeries(target.sid, target.title)
+    if (!target) return
+    if (target.kind === 'series') void libraryStore.getState().enterSeries(target.sid, target.title)
+    else void libraryStore.getState().enterSingles()
   }, [libraryStore, store])
 
   const level = useStore(libraryStore, (s) => s.level)

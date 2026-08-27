@@ -62,12 +62,15 @@ export interface StreamState {
  * read as a raw series id until an unrelated fetch happened to fill it in. It
  * is the UNtruncated title, not the crumb's own cut-to-fit label, because
  * `LibraryWindow`'s level-2 header renders it where there is room for all of it.
+ *
+ * `kind: 'singles'` is the second producer (Task: closing the last open video
+ * window). `windows/videoWindowState.ts`'s `libraryReturnTarget` is what picks
+ * between the two - the series scope for an episode that has one, this one for
+ * a standalone recording, so „in die vorherige Auswahl zurück kommen" lands on
+ * the „Einzelaufzeichnungen" group tile's own episode list rather than at level
+ * 1, where a series-less recording was never listed directly.
  */
-export interface BrowseTarget {
-  kind: 'series'
-  sid: string
-  title: string
-}
+export type BrowseTarget = { kind: 'series'; sid: string; title: string } | { kind: 'singles' }
 
 export interface PlayerStore {
   mode: 'browse' | 'player'
@@ -252,7 +255,8 @@ export interface PlayerStore {
   reloadStream(flavorType: string): void
   /**
    * Leaves player mode. With a `target`, browse mode opens directly at that
-   * series' episode list instead of at level 1 - see `BrowseTarget`.
+   * scope's episode list (a series, or the „Einzelaufzeichnungen" singles
+   * group) instead of at level 1 - see `BrowseTarget`.
    */
   toBrowse(target?: BrowseTarget): void
   /**

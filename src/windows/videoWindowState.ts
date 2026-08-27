@@ -1,4 +1,6 @@
 import type { AngularSize, SphericalPosition } from 'sphere-shell'
+import type { Episode } from '../opencast/types'
+import type { BrowseTarget } from '../player/store'
 
 /**
  * Everything about a video window that is decidable WITHOUT React, uikit or a
@@ -127,36 +129,60 @@ export function videoWindowPlacement(index: number, streamCount: number): VideoW
 }
 
 /**
+ * Where browse mode should land after closing the LAST open video window -
+ * the user's own directive: „Wenn beim letzten Video das x zum fenster
+ * schließen gedrückt wird, sollte man in die vorherige Auswahl zurück
+ * kommen." The "previous selection" is the scope the episode was FOUND in:
+ * the series' own episode list for an episode that has one (mirroring the
+ * dock breadcrumb's „Reihe" crumb - `DockTransport.tsx`'s `onCrumb`), or the
+ * „Einzelaufzeichnungen" singles group for one that does not, since a
+ * series-less recording was never listed at level 1 directly.
+ *
+ * Falls back to the series id when `seriesTitle` is missing - same reasoning
+ * as `breadcrumbTrail`'s series crumb: a raw id is ugly but navigable and
+ * honest, and dropping the target for a missing title would be worse than
+ * showing it.
+ */
+export function libraryReturnTarget(episode: Pick<Episode, 'seriesId' | 'seriesTitle'>): BrowseTarget {
+  if (episode.seriesId != null) {
+    return { kind: 'series', sid: episode.seriesId, title: episode.seriesTitle ?? episode.seriesId }
+  }
+  return { kind: 'singles' }
+}
+
+/**
  * The second line of the stream-error tile: what the user can do if „Neu laden"
  * does not help, or `null` when the tile does not need to say.
  *
- * Only the LAST open stream gets one, and it exists because that case is the
- * one with no obvious way out: `canClose` refuses to unload the last stream, so
- * the window's own X is vetoed (closed and immediately restored - see
- * 'veto-close'), and single-flavor recordings are the overwhelming majority of
- * a real Opencast corpus. The reload button covers a transient failure; this
- * line covers a permanent one, and the dock's „Home" crumb is the actual
- * escape. With another stream still up there is nothing to explain - the X
- * works, and the rest of the wall keeps playing.
+ * Only the LAST open stream gets one, and it exists because that case used to
+ * have no obvious way out: `canClose` refused to unload the last stream, so
+ * the window's own X was vetoed (closed and immediately restored). Since the
+ * last-open-window close now NAVIGATES back to the library instead of being
+ * vetoed (`streamWindowAction`'s `'exit-to-library'` - see its own doc
+ * comment), the X itself is that way out, and this hint says so directly
+ * rather than pointing at a separate control. The reload button still covers
+ * a transient failure; this line covers a permanent one. With another stream
+ * still up there is nothing to explain - the X works exactly as it always
+ * has, and the rest of the wall keeps playing.
  *
- * NAMES THE CONTROL THAT EXISTS. It used to say „über Bibliothek im Dock",
- * which was correct until the dock UX round replaced that button with the
- * breadcrumb's „Home" crumb - at which point this line was pointing the user,
- * in their only way out of a dead stream, at something no longer on screen. If
- * the breadcrumb is ever renamed again, this string goes with it.
+ * NAMES THE MECHANISM, NOT A SPECIFIC CONTROL LABEL. The previous wording
+ * named the dock's „Home" crumb (itself a fix for an earlier drift, when it
+ * had named a since-removed „Bibliothek" button) - two driftable strings in a
+ * row is a pattern, and "close this window" cannot go stale the way a control
+ * NAME can, because it is this exact tile's own window being described.
  *
  * @param canClose `PlayerStore.canClose(flavorType)` for this window's stream.
  */
 export function streamErrorEscapeHint(canClose: boolean): string | null {
   if (canClose) return null
-  return 'Einziger Stream dieser Aufzeichnung - hilft Neu laden nicht, zurück über Home im Dock.'
+  return 'Einziger Stream dieser Aufzeichnung - hilft Neu laden nicht, das X am Fenster bringt jetzt zurück zur Bibliothek.'
 }
 
 export type StreamWindowAction =
   | 'none'
   | 'close-stream'
   | 'reopen-stream'
-  | 'veto-close'
+  | 'exit-to-library'
   | 'reset-window'
 
 export interface StreamWindowSyncInput {
@@ -214,11 +240,16 @@ export interface StreamWindowSyncInput {
  * it clears a `closed`/`minimized` flag left over from the previous episode, and
  * it takes precedence over every other rule (see `episodeChanged`).
  *
- * 'veto-close' is the one asymmetry: sphere-shell 0.3.0's `<Window>` has no
- * `closable` prop (the plan assumed one), so the last open stream's window
- * cannot suppress its own X button. The shell closes it, the store refuses to
- * unload it (`canClose` false - without a stream there is no player), and the
- * caller undoes the shell's close instead. See VideoWindows.tsx.
+ * 'exit-to-library' is the one asymmetry: sphere-shell's `<Window>` has no
+ * `closable` prop, so the last open stream's window cannot suppress its own X
+ * button. The shell closes it, the store refuses to unload the stream
+ * (`canClose` false - without a stream there is no player) - and rather than
+ * undoing the shell's close (the OLD "veto", which used to restore the window
+ * right back open), the caller now ACCEPTS the close as the trigger to leave
+ * player mode entirely: „Wenn beim letzten Video das x zum fenster schließen
+ * gedrückt wird, sollte man in die vorherige Auswahl zurück kommen." See
+ * `VideoWindows.tsx`'s `useStreamWindowSync` and `libraryReturnTarget` above
+ * for where that lands.
  */
 export function streamWindowAction(input: StreamWindowSyncInput): StreamWindowAction {
   const { shell, streamOpen, canClose, episodeChanged } = input
@@ -234,7 +265,7 @@ export function streamWindowAction(input: StreamWindowSyncInput): StreamWindowAc
   // starts with its windows up.
   if (episodeChanged) return shell.closed || shell.minimized ? 'reset-window' : 'none'
 
-  if (shell.closed && streamOpen) return canClose ? 'close-stream' : 'veto-close'
+  if (shell.closed && streamOpen) return canClose ? 'close-stream' : 'exit-to-library'
   if (!shell.closed && !streamOpen) return 'reopen-stream'
   return 'none'
 }

@@ -12,6 +12,7 @@ import type { PlayerStoreApi } from '../player/store'
 import { describeMediaError } from '../player/mediaElements'
 import {
   VIDEO_ASPECT,
+  libraryReturnTarget,
   streamErrorEscapeHint,
   streamWindowAction,
   videoWindowId,
@@ -85,13 +86,41 @@ function useStreamWindowSync(store: PlayerStoreApi, flavorType: string): void {
       case 'reopen-stream':
         store.getState().reopenStream(flavorType)
         break
-      case 'veto-close':
-        // The last open stream: the store refuses to unload it, so the shell's
-        // close has to be undone. sphere-shell 0.3.0's <Window> has no
-        // `closable` prop, so the X button cannot be hidden from here - see
-        // streamWindowAction's doc comment.
-        shellStore.getState().restore(id)
+      case 'exit-to-library': {
+        // The last open stream's window: the store still refuses to unload it
+        // (`closeStream`'s own `canClose` gate, unchanged), but instead of
+        // undoing the shell's close - the OLD veto, which flashed the window
+        // straight back open - this now ACCEPTS the close as the signal to
+        // leave player mode entirely: „Wenn beim letzten Video das x zum
+        // fenster schließen gedrückt wird, sollte man in die vorherige
+        // Auswahl zurück kommen." `episode` is read BEFORE `toBrowse` clears
+        // it - `libraryReturnTarget` needs its `seriesId`/`seriesTitle` to
+        // pick the series' own episode list over the "Einzelaufzeichnungen"
+        // singles group.
+        //
+        // `toBrowse` is the EXACT SAME path the dock breadcrumb's Home crumb
+        // uses (`DockTransport.tsx`'s `onCrumb`): stop ticking, pause the
+        // engine, tear down every stream's element, flip `mode` - so there is
+        // no separate stop/pause logic to keep in sync with that path, and no
+        // orphaned audio.
+        //
+        // Deliberately NOT `shellStore.getState().restore(id)` (the old
+        // veto's fix): restoring a window that is about to unmount anyway
+        // would fight the teardown below for nothing - `toBrowse` empties
+        // `streams`, which is what actually unmounts every video window (and,
+        // per sphere-shell, unregisters their shell entries and dock tiles -
+        // see `VideoWindow`'s own doc comment on why a window stays mounted
+        // while closed at all). Nothing here needs to touch the shell store
+        // directly; the mode switch above does it by unmounting this whole
+        // subtree, the same mechanism `useStartClosed.ts`'s doc comment
+        // describes for "a window that has left the registry comes back as a
+        // NEW one" - so the next episode's windows register clean, with no
+        // stale flag for `episodeChanged`'s 'reset-window' step to even need
+        // to clear.
+        const ep = store.getState().episode
+        store.getState().toBrowse(ep ? libraryReturnTarget(ep) : undefined)
         break
+      }
       case 'none':
         break
     }
