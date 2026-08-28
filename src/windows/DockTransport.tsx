@@ -75,8 +75,29 @@ import { segmentTickFractions } from './chaptersState'
 const BUTTON_ICON_PX = 15
 const SMALL_ICON_PX = 13
 const TRACK_HEIGHT_PX = 6
-/** Chapter tick marks on the track - see the row 1 JSX below for how they're positioned. */
-const TICK_WIDTH_PX = 2
+/**
+ * Chapter tick marks on the track - see the row 1 JSX below for how they're
+ * positioned.
+ *
+ * Widened from the original 2px („Hattest du die Kapitelmarken und Preview
+ * Bilder in der Timeline noch nicht aktiviert?" - the user looked for them on
+ * a real recording and found nothing). Live pixel measurement during this
+ * task's diagnosis (`gl.readPixels` against the actual rendered track, a
+ * segmented test recording, desktop/magic-window view) found the ticks WERE
+ * rendering at the mathematically correct blended colour - but at 2px wide
+ * they occupied only 2-3 real screen pixels at an ordinary viewing distance,
+ * i.e. they were there but essentially sub-pixel. The bigger factor turned
+ * out to be data, not rendering (most real Opencast recordings, including
+ * every one of 350 sampled from oc.explore.opencast.org's own search API,
+ * carry no `segments` at all - see this file's own doc comment section below
+ * and `chaptersState.ts`), but a tick that IS present being this easy to miss
+ * is worth fixing regardless of that. 3px is still a thin sliver relative to
+ * the track's own height, not a fat notch, but roughly 50% more surface area
+ * to catch the eye - and, through a headset lens (softening + some chromatic
+ * aberration), the couple of extra physical pixels matter more than they do
+ * on a flat desktop screenshot.
+ */
+const TICK_WIDTH_PX = 3
 /**
  * Semi-transparent white, not a solid colour: the ticks have to read against
  * BOTH the dark unplayed track (`#33333d`) and the lighter blue played fill
@@ -84,9 +105,20 @@ const TICK_WIDTH_PX = 2
  * translucent white lightens whichever backdrop is under it rather than
  * fighting either one outright, so one colour value works on both without a
  * mix-blend-mode uikit does not have.
+ *
+ * Raised from 0.55 alongside `TICK_WIDTH_PX` above, for the same reason:
+ * measured live, a 0.55-opacity tick over the unplayed track blends to
+ * `rgb(163,163,167)` (against the track's own `rgb(51,51,61)` - a real
+ * ~110/255 per-channel difference, not actually weak) but over the BLUE
+ * fill bar (`rgb(111,159,255)`) the same math blends to
+ * `rgb(190,212,255)` - only ~50-80/255 per channel, and all three channels
+ * moving the same direction as the backdrop rather than away from it, which
+ * reads as barely-there. 0.85 keeps the "lighten, don't fight" blend this
+ * constant's own doc comment describes while giving the fill-bar case
+ * noticeably more separation too.
  */
 const TICK_COLOR = '#ffffff'
-const TICK_OPACITY = 0.55
+const TICK_OPACITY = 0.85
 /**
  * Least width the timeline is ever laid out at. It normally takes whatever row
  * 1 has left over (`flexGrow`), which is "the whole width of the dock" minus
