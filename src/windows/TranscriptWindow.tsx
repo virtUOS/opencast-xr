@@ -52,6 +52,33 @@ const EMPTY_TEXT = 'Kein Transkript.' // unreachable in practice - this componen
  * paragraph - that is expected and not the defect (the defect is about
  * *volume*, not about wrapping happening at all).
  *
+ * ## Row overlap at realistic transcript length: `flexShrink={0}`
+ *
+ * A SECOND, unrelated uikit defect, found chasing a user report that sounded
+ * at first like a repeat of an already-fixed one: „Die Zeilen im Transkript
+ * überlagern sich leider immer noch" - "still", because an earlier round had
+ * fixed a DIFFERENT overlap (`SubtitleHud.tsx`'s head-locked caption not
+ * wrapping at all, entry 7). This transcript window's rows DO wrap; the bug
+ * here is that every row's own auto-height shrinks as more rows exist
+ * alongside it in the same scrolling column - live-measured (`Container.
+ * size.value`) at 43.2px/row for 10 rows of realistic mixed-length German
+ * cues, 27.9px at 20, 16.6px at 30, and 12px (padding only, zero content
+ * credited) at 40-50 - a real transcript's row count, easily. The row BOXES
+ * (and their click targets, and the active-row highlight) shrink together;
+ * the TEXT inside each one does not, so it bleeds into whichever neighbour
+ * is closest. See `docs/UIKIT-NOTES.md` entry 8 for the full mechanism (a
+ * Yoga flex child's default `flexShrink: 1`, which a scrolling column
+ * apparently does not implicitly override for its children the way a
+ * browser would). Fixed by `flexShrink={0}` on the row `<Container>` below -
+ * confirmed live at up to 50 mixed-length rows: every row reports its own
+ * correct, content-driven height again, and every consecutive pair's
+ * `relativeCenter` gap matches `height/2 + gap + height/2` with zero
+ * deviations over 0.5px, i.e. no overlap at a volume where the unfixed code
+ * was already compressed to the padding floor. This is independent of the
+ * `CONTINUATION_CHUNK_CHARS` split above - that one caps how tall any ONE
+ * row can get (entry 2's concern); this one is about sibling COUNT, and
+ * affects single-line rows just as much as wrapped ones.
+ *
  * ## Auto-scroll: the public `scrollPosition`/`maxScrollPosition` signals
  *
  * `@pmndrs/uikit` 1.0.74's `Container` instance publicly exposes
@@ -179,6 +206,14 @@ export function TranscriptWindow({ store }: { store: PlayerStoreApi }) {
               <Container
                 key={row.id}
                 ref={active ? (instance: VanillaContainer | null) => { activeRowRef.current = instance } : undefined}
+                // Load-bearing, not a defensive default - see this file's own
+                // doc comment ("Row overlap at realistic transcript length")
+                // and docs/UIKIT-NOTES.md entry 8: without it, every row's
+                // own auto-height shrinks as more rows exist in this same
+                // scrolling column, and at a real transcript's row count it
+                // collapses to the padding floor - which is what "rows
+                // overlapping" turned out to be.
+                flexShrink={0}
                 padding={6}
                 borderRadius={4}
                 backgroundColor={active ? ACTIVE_BG : RESTING_BG}

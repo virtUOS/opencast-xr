@@ -244,7 +244,17 @@ export function MediaList({ items, onSelect, onSelectImage, onMore, moreLabel, e
           // other two, which is exactly the "same underlying Object3D"
           // bleed this mode exists to avoid.
           return (
-            <Container key={item.id} flexDirection="row" gap={10} alignItems="stretch">
+            // `flexShrink={0}` - see `docs/UIKIT-NOTES.md` entry 8: a uikit
+            // scrolling column's children default to `flexShrink: 1`, so a
+            // LONG list (many tiles) proportionally squashes every row's
+            // auto-height to fit the column's own box instead of letting the
+            // column genuinely overflow and scroll - found and fixed in
+            // `TranscriptWindow.tsx`'s rows, applied here defensively since
+            // this component backs every long list in the app (the library,
+            // a series' episodes, chapters) and none of them are exercised
+            // with enough real items in this repo's own fixtures to have hit
+            // the threshold live.
+            <Container key={item.id} flexShrink={0} flexDirection="row" gap={10} alignItems="stretch">
               <Container
                 padding={4}
                 borderRadius={6}

@@ -355,6 +355,74 @@ panel's content width, i.e. its own `maxWidth` minus its horizontal padding).
 A shrink-wrapping ancestor `Container` (`maxWidth`, no `width`) still hugs
 short text exactly as before - only the `<Text>`'s own bound changes.
 
+## 8. A scrolling column's children default to `flexShrink: 1` - more siblings squashes EVERY row, not just the overflowing ones
+
+**Symptom:** a `Container overflow="scroll"` column of many rows, each an
+auto-height `<Container>` wrapping a `<Text>` - renders every row SHORTER
+than its own content needs, and the shortfall grows with the sibling count:
+the SAME row content measured 43.2px tall at 10 siblings, 27.9px at 20, 16.6px
+at 30, and 12px (padding only - zero content height credited at all) at 40
+and 50, live-measured via `Container.size.value` on the actual mounted rows.
+Visually this is rows overlapping each other: the row BOXES (backgrounds,
+click targets, the active-row highlight) shrink to fit however many exist,
+but the TEXT inside each one still wants its full multi-line height, so it
+bleeds into whichever neighbour is closest - „Die Zeilen im Transkript
+überlagern sich".
+
+**Found in:** the opencast player's `TranscriptWindow.tsx` - a Quest-adjacent
+report („Die Zeilen im Transkript überlagern sich leider immer noch", after
+an EARLIER round had already fixed a different overlap - the head-locked
+`SubtitleHud.tsx` caption, entry 7's own bug - and this one turned out to be
+a second, unrelated defect hiding behind a very similar-sounding complaint).
+Confirmed live: 40 rows of realistic-length German sentences (mixed 1-line
+and 2-3-line cues, from real oc.explore.opencast.org captions) - at the
+UNFIXED code, `Container.size.value[1]` for every row converged toward the
+padding floor as sibling count grew, uniformly across ALL rows regardless of
+each row's own text length (ruling out "some individual row mismeasured its
+own text" and pointing at a GLOBAL layout effect over the whole scrolling
+column instead).
+
+**Root cause:** not traced into `@pmndrs/uikit`'s own Yoga integration source,
+but the SHAPE of the bug matches the CSS flexbox default exactly: a flex
+child's `flexShrink` defaults to `1` (allowed to shrink) unless set
+otherwise, and a Yoga column with `overflow: scroll` does not appear to
+implicitly opt its children out of that default the way a browser's
+`overflow: auto`/`scroll` effectively does for block-level content. With N
+auto-height children all shrinkable and a FIXED cross-axis box (the window's
+own declared `size`), Yoga's flex-shrink resolution distributes the "not
+enough room" deficit across every child proportionally to its own basis -
+which is exactly "more siblings, less height each, uniformly" instead of
+"content overflows its container and the container scrolls," which is what
+`overflow="scroll"` is supposed to buy in the first place.
+
+**Fix:** `flexShrink={0}` on every row `<Container>` in the scrolling column.
+Verified live, same harness: with the prop in place, 50 rows of the SAME
+mixed short/long content each report their own correct, content-driven
+height (`43.2`/`27.6`, matching what a row reports in ISOLATION), and every
+consecutive pair's `relativeCenter` gap matches `height/2 + gap + height/2`
+to within measurement noise (checked across all 39 gaps in a 40-row mixed
+run - zero deviations over `0.5px`) - i.e. no overlap, at a volume where the
+unfixed code was already compressed to the padding floor. Applied
+defensively to `MediaList.tsx`'s row `<Container>` too (backs the library,
+series, and chapters lists - none of which happen to have enough real items
+in this repo's own fixtures to have hit the threshold live, but the same
+"long scrolling list of auto-height rows" shape is exactly this bug's
+trigger).
+
+**Relationship to entry 2 (cumulative wrapped-line volume can render
+blank):** a DIFFERENT defect in the same neighbourhood, not the same one.
+Entry 2 is about total WRAPPED-LINE volume in one column eventually making
+the overflowing content's own glyph batch invisible; this entry is about
+FLEX-SHRINK compressing every row's own LAYOUT BOX in proportion to sibling
+COUNT, independent of how many lines any of them wrap to (a column of many
+single-line, unwrapped rows shrinks under this bug too - wrapping is not a
+precondition). `TranscriptWindow.tsx` still keeps its
+`CONTINUATION_CHUNK_CHARS` split for entry 2's sake (an unusually long cue
+still gets chunked into shorter rows, capping any ONE row's own wrapped-line
+count) - the `flexShrink={0}` fix here is what keeps rows from overlapping
+at realistic transcript LENGTHS (many rows), and is unrelated to how long
+any single one of them is.
+
 ---
 
 Linked from `src/App.tsx`'s header comment. Add an
