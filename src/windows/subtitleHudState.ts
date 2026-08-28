@@ -21,6 +21,15 @@ export interface SeekFeedback {
   timeLabel: string
   /** The chapter/segment title at that position, or `null` when the episode has no segments (or none qualify). */
   chapterTitle: string | null
+  /**
+   * The matching segment's own preview image (Opencast's per-segment
+   * mpeg-7 slide preview, `OcSegment.previewUrl` - see `parse.ts`), or
+   * `null` when there is no qualifying segment at all OR the segment that
+   * DOES qualify simply has no preview attachment of its own. Either way
+   * the caller renders nothing extra rather than an empty placeholder box -
+   * see `SubtitleHud.tsx`.
+   */
+  imageUrl: string | null
 }
 
 /** How long a chapter title may render in the HUD's single-line seek-feedback readout before being truncated - tighter than `chaptersState.ts`'s own `OCR_MAX_CHARS` (120), since this shares one line with the timestamp in a HUD panel, not a whole tile. */
@@ -40,5 +49,6 @@ export function seekFeedback(segments: OcSegment[], previewS: number | null, dur
   const timeLabel = formatTimestamp(previewS, includeHours)
   const index = activeSegmentIndex(segments, previewS)
   const chapterTitle = index >= 0 ? truncateOcrText(segments[index].text, SEEK_FEEDBACK_CHAPTER_MAX_CHARS) : null
-  return { timeLabel, chapterTitle }
+  const imageUrl = index >= 0 ? segments[index].previewUrl ?? null : null
+  return { timeLabel, chapterTitle, imageUrl }
 }

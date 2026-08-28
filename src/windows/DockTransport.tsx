@@ -70,10 +70,23 @@ import {
   rayToTrackFractionCurved,
   reduceDrag,
 } from './timelineDrag'
+import { segmentTickFractions } from './chaptersState'
 
 const BUTTON_ICON_PX = 15
 const SMALL_ICON_PX = 13
 const TRACK_HEIGHT_PX = 6
+/** Chapter tick marks on the track - see the row 1 JSX below for how they're positioned. */
+const TICK_WIDTH_PX = 2
+/**
+ * Semi-transparent white, not a solid colour: the ticks have to read against
+ * BOTH the dark unplayed track (`#33333d`) and the lighter blue played fill
+ * (`#6f9fff`) they sit on top of - see row 1's JSX for the stacking order. A
+ * translucent white lightens whichever backdrop is under it rather than
+ * fighting either one outright, so one colour value works on both without a
+ * mix-blend-mode uikit does not have.
+ */
+const TICK_COLOR = '#ffffff'
+const TICK_OPACITY = 0.55
 /**
  * Least width the timeline is ever laid out at. It normally takes whatever row
  * 1 has left over (`flexGrow`), which is "the whole width of the dock" minus
@@ -499,6 +512,43 @@ function IconButton({
  * mode remain out of this component's scope: hand/touch (`spherecast`)
  * hit-testing is not bend-corrected (ray pointers, which is what this
  * track's own pointer handlers are, are), and this fix does not change that.
+ *
+ * ## Chapter tick marks, and hover (not just drag) seek-preview
+ *
+ * „Können wir die Kapitelmarken wenn verfügbar noch in der Zeitleiste
+ * anzeigen und wenn man drüber hoovert auch das passende Vorschaubild?" - two
+ * additions, both built on the SAME `segments`/`seekPreviewS` seam this
+ * component already had:
+ *
+ * 1. A thin tick mark per INTERIOR segment boundary
+ *    (`chaptersState.ts`'s `segmentTickFractions` - deliberately reused
+ *    rather than a second segment-lookup module, per that file's own doc
+ *    comment) is drawn on top of the track, AFTER the fill bar in JSX order
+ *    so it stays visible against both the played and unplayed portions (see
+ *    `TICK_COLOR`). Every tick carries `DECORATIVE_POINTER_EVENTS`, exactly
+ *    like the fill bar beside it, so the track stays the single hit object
+ *    this whole component's drag math depends on.
+ * 2. `onTrackPointerMove` now branches on `dragStateRef.current.dragging`:
+ *    while NO drag is in progress, a hover move writes `setSeekPreview`
+ *    directly (bypassing `reduceDrag`, whose own foreign-pointer rejection
+ *    is a DRAG-gesture concern that does not apply to a plain hover), and
+ *    `onTrackPointerLeave` clears it again - guarded the same way, so a
+ *    captured drag's own pointerup/pointercancel effects remain the only way
+ *    an in-progress drag's preview is cleared. This was wired up (rather
+ *    than shipped drag-only) because plain hover-without-press pointer
+ *    callbacks are already proven reliable in this exact stack: sphere-shell's
+ *    `HoverLabel` - every one of this dock's fifteen button tooltips - is
+ *    driven entirely by `onPointerEnter`/`onPointerLeave` firing with no
+ *    press involved (`IconButton`'s own doc comment), which is the same
+ *    `@pmndrs/pointer-events` hover machinery this track's `onPointerMove`
+ *    rides on.
+ *
+ * `seekPreviewS` already fed `SubtitleHud.tsx`'s scrub-feedback readout
+ * (time + chapter title); that same value now also carries the matching
+ * segment's preview image, so hovering (or dragging) the track shows it
+ * there with no new plumbing between this component and that one - see
+ * `subtitleHudState.ts`'s `seekFeedback` and `SubtitleHud.tsx`'s own doc
+ * comment for the rest of that path.
  */
 export function DockTransport({
   store,
@@ -556,6 +606,15 @@ export function DockTransport({
   const displayTimeS = seekPreviewS ?? currentTimeS
   const fillFraction = secondsToFraction(displayTimeS, durationS)
   const { current: currentLabel, total: totalLabel } = transportTimeParts(displayTimeS, durationS)
+
+  // Chapter tick marks - see `segmentTickFractions`'s own doc comment for
+  // exactly which boundaries qualify (interior ones only). `[]` whenever the
+  // episode has no segments, which is most of develop.opencast.org's own
+  // recordings - the row 1 JSX below simply renders nothing extra then.
+  const tickFractions = useMemo(
+    () => segmentTickFractions(episode?.segments ?? [], episode?.durationMs ?? 0),
+    [episode?.segments, episode?.durationMs],
+  )
 
   const trackRef = useRef<VanillaContainer | null>(null)
   // Mutable, not React state: a drag gesture's own bookkeeping (which
@@ -642,6 +701,26 @@ export function DockTransport({
 
   const onTrackPointerMove = useCallback(
     (e: ThreeEvent<PointerEvent>) => {
+      // A plain HOVER move (no active drag) is not a drag-gesture event at
+      // all, so it deliberately bypasses `reduceDrag` rather than being fed
+      // into it: that reducer's `pointermove` case exists to reject a
+      // FOREIGN pointer mid-drag, which does not apply here - there is no
+      // gesture in progress to be foreign to. `@pmndrs/pointer-events`
+      // reliably emits hover-only pointer callbacks in this stack with no
+      // button held - see sphere-shell's own `HoverLabel` (this dock's
+      // fifteen button tooltips, all driven by `onPointerEnter`/
+      // `onPointerLeave` with no press involved) - so this reuses the SAME
+      // `seekPreviewS` seam `SubtitleHud.tsx` already reads from a drag,
+      // extending it to a plain hover exactly as that component's own doc
+      // comment now describes. Not propagation-stopped: an idle hover over
+      // the track is not a gesture that needs to suppress anything else.
+      if (!dragStateRef.current.dragging) {
+        const fraction = resolveFraction(e)
+        if (fraction !== null) {
+          store.getState().setSeekPreview(fractionToSeconds(fraction, durationS))
+        }
+        return
+      }
       const fraction = resolveFraction(e)
       const { state, effects } = reduceDrag(dragStateRef.current, {
         type: 'pointermove',
@@ -652,8 +731,24 @@ export function DockTransport({
       if (effects.length > 0) e.stopPropagation()
       applyEffects(effects, e)
     },
-    [resolveFraction, applyEffects],
+    [resolveFraction, applyEffects, store, durationS],
   )
+
+  // Clears the hover-only preview once the pointer leaves the track -
+  // ONLY while nothing is actually being dragged: a captured drag (see
+  // `applyEffects`'s `capture` case) keeps receiving move/up events on this
+  // same element even once the pointer ray has physically left its bounds
+  // (that is the entire point of `setPointerCapture`, and exactly what
+  // `rayToTrackFraction`'s own doc comment relies on for an overshooting
+  // drag to still clamp to 0/duration rather than getting stuck) - a real
+  // `pointerleave` should not fire mid-capture in that case, but the guard
+  // is defensive: an in-progress drag's preview must only ever be cleared by
+  // `reduceDrag`'s own `pointerup`/`pointercancel` effects, never by this.
+  const onTrackPointerLeave = useCallback(() => {
+    if (!dragStateRef.current.dragging) {
+      store.getState().setSeekPreview(null)
+    }
+  }, [store])
 
   const onTrackPointerUp = useCallback(
     (e: ThreeEvent<PointerEvent>) => {
@@ -919,6 +1014,7 @@ export function DockTransport({
             onPointerMove={onTrackPointerMove}
             onPointerUp={onTrackPointerUp}
             onPointerCancel={onTrackPointerCancel}
+            onPointerLeave={onTrackPointerLeave}
           >
             <Container
               positionType="absolute"
@@ -936,6 +1032,30 @@ export function DockTransport({
               backgroundColor="#6f9fff"
               pointerEvents="none"
             />
+            {/* Chapter tick marks - one per INTERIOR segment boundary (see
+                `segmentTickFractions`). Rendered AFTER the fill bar above, so
+                they draw on top of it and stay visible whether a given tick
+                falls in the played or unplayed portion of the track - see
+                `TICK_COLOR`'s doc comment for why a translucent white reads on
+                both. `DECORATIVE_POINTER_EVENTS` on every one of them is
+                load-bearing, not incidental: the track must stay ONE hit
+                object (see this component's own doc comment on the drag
+                math), and a tick sitting in front of the fill bar would
+                otherwise be exactly the kind of extra Object3D that could
+                intercept a press meant for the track underneath it. */}
+            {tickFractions.map((fraction, i) => (
+              <Container
+                key={i}
+                positionType="absolute"
+                positionLeft={`${Math.round(fraction * 1000) / 10}%`}
+                positionTop={0}
+                width={TICK_WIDTH_PX}
+                height={TRACK_HEIGHT_PX}
+                backgroundColor={TICK_COLOR}
+                opacity={TICK_OPACITY}
+                pointerEvents={DECORATIVE_POINTER_EVENTS}
+              />
+            ))}
           </Container>
           <Text fontSize={11} color="#cfd8ff" width={TIME_LABEL_WIDTH_PX}>
             {totalLabel}

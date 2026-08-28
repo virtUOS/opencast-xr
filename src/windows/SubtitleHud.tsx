@@ -1,6 +1,6 @@
 import { useMemo, type ReactNode } from 'react'
 import { useStore } from 'zustand'
-import { Container, Text } from '@react-three/uikit'
+import { Container, Image, Text } from '@react-three/uikit'
 import { DEFAULT_HEADLOCKED, HeadLocked } from 'sphere-shell'
 import { DEFAULT_CAPTION_SCALE } from '../captionScale'
 import type { PlayerStoreApi } from '../player/store'
@@ -53,7 +53,21 @@ const FEEDBACK_DESIGN = {
   paddingX: 16 * FEEDBACK_SCALE,
   paddingY: 8 * FEEDBACK_SCALE,
   borderRadius: 8 * FEEDBACK_SCALE,
+  gap: 6 * FEEDBACK_SCALE,
 }
+
+/**
+ * The seek-feedback panel's own preview image, when `seekFeedback` resolves
+ * one (the segment nearest the drag/hover position, when it has its own
+ * `previewUrl` - see `subtitleHudState.ts`). A 16:9 THUMBNAIL, not a full
+ * video frame: "sized modestly" per the brief, well under the caption
+ * panel's own `CAPTION_DESIGN.maxWidth` (520) so a preview never dwarfs the
+ * caption it sits above. Scaled by the SAME fixed `FEEDBACK_SCALE` as the
+ * rest of this panel (see that constant's own doc comment) rather than the
+ * user's adjustable caption scale - this is scrub feedback, not a caption.
+ */
+const SEEK_FEEDBACK_IMAGE_W = 160 * FEEDBACK_SCALE
+const SEEK_FEEDBACK_IMAGE_H = 90 * FEEDBACK_SCALE
 
 /**
  * Player-mode HUD: an open captions readout and non-interactive seek
@@ -77,9 +91,11 @@ const FEEDBACK_DESIGN = {
  * The CAPTION's size is user-adjustable from the dock (`subtitleScale` on the
  * store, multiplied into `CAPTION_DESIGN`'s pixels here); the seek-feedback
  * panel's is fixed. See `../captionScale.ts`.
- * - **Seek feedback**: while the timeline is being dragged
+ * - **Seek feedback**: while the timeline is being dragged - OR, per
+ *   `DockTransport.tsx`'s own doc comment, merely hovered -
  *   (`seekPreviewS !== null`), the target `M:SS`/`H:MM:SS` plus - when the
- *   episode has segments - the chapter/segment title there
+ *   episode has segments - the chapter/segment title there, and, when that
+ *   segment has its own preview image, that image above the text
  *   (`subtitleHudState.ts`'s `seekFeedback`, itself built on
  *   `chaptersState.ts`'s `activeSegmentIndex` - Task 14's chapter-lookup
  *   logic, not duplicated here). Shown regardless of `subtitlesOn`: this is
@@ -231,9 +247,26 @@ export function SubtitleHud({ store }: { store: PlayerStoreApi }) {
             paddingY={FEEDBACK_DESIGN.paddingY}
             borderRadius={FEEDBACK_DESIGN.borderRadius}
           >
-            <Text fontSize={FEEDBACK_DESIGN.fontSize} color="#ffffff">
-              {feedback.chapterTitle != null ? `${feedback.timeLabel} - ${feedback.chapterTitle}` : feedback.timeLabel}
-            </Text>
+            {/* The image, when the nearest segment has one, sits ABOVE the
+                time/title line in the same panel - see `SEEK_FEEDBACK_IMAGE_W`'s
+                doc comment. `feedback.imageUrl` is `null` (not an empty string)
+                whenever there is nothing to show - no segments at all, or the
+                nearest one has no preview attachment - and this renders NOTHING
+                extra in that case, never an empty placeholder box, so the
+                time/title-only readout is unchanged from before this feature. */}
+            <Container flexDirection="column" alignItems="center" gap={FEEDBACK_DESIGN.gap}>
+              {feedback.imageUrl != null && (
+                <Image
+                  src={feedback.imageUrl}
+                  width={SEEK_FEEDBACK_IMAGE_W}
+                  height={SEEK_FEEDBACK_IMAGE_H}
+                  borderRadius={FEEDBACK_DESIGN.borderRadius}
+                />
+              )}
+              <Text fontSize={FEEDBACK_DESIGN.fontSize} color="#ffffff">
+                {feedback.chapterTitle != null ? `${feedback.timeLabel} - ${feedback.chapterTitle}` : feedback.timeLabel}
+              </Text>
+            </Container>
           </HudPanel>
         )}
         {showCaption && cue != null && (

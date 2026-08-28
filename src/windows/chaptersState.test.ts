@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import type { OcSegment } from '../opencast/types'
-import { OCR_MAX_CHARS, activeSegmentIndex, segmentTile, segmentTiles, truncateOcrText } from './chaptersState'
+import {
+  OCR_MAX_CHARS,
+  activeSegmentIndex,
+  chapterSeekTargetMs,
+  segmentTickFractions,
+  segmentTile,
+  segmentTiles,
+  truncateOcrText,
+} from './chaptersState'
 
 function seg(overrides: Partial<OcSegment> = {}): OcSegment {
   return { startMs: 0, durationMs: 60_000, text: 'Slide text', previewUrl: undefined, ...overrides }
@@ -93,5 +101,50 @@ describe('activeSegmentIndex', () => {
   it('is robust to unsorted input', () => {
     const shuffled = [seg({ startMs: 120_000 }), seg({ startMs: 0 }), seg({ startMs: 60_000 })]
     expect(activeSegmentIndex(shuffled, 90)).toBe(2) // the 60_000 entry, at index 2 of the shuffled array
+  })
+})
+
+describe('segmentTickFractions', () => {
+  it('returns [] for an empty segment list', () => {
+    expect(segmentTickFractions([], 100_000)).toEqual([])
+  })
+
+  it('returns [] for a non-positive duration', () => {
+    expect(segmentTickFractions([seg({ startMs: 10_000 })], 0)).toEqual([])
+    expect(segmentTickFractions([seg({ startMs: 10_000 })], -1)).toEqual([])
+  })
+
+  it('skips a boundary at exactly 0', () => {
+    expect(segmentTickFractions([seg({ startMs: 0 })], 100_000)).toEqual([])
+  })
+
+  it('skips a boundary at exactly the episode duration', () => {
+    expect(segmentTickFractions([seg({ startMs: 100_000 })], 100_000)).toEqual([])
+  })
+
+  it('maps an interior boundary to its own fraction of the duration', () => {
+    expect(segmentTickFractions([seg({ startMs: 25_000 })], 100_000)).toEqual([0.25])
+  })
+
+  it('keeps interior boundaries in order and drops the leading/trailing ones', () => {
+    const segments = [
+      seg({ startMs: 0 }),
+      seg({ startMs: 20_000 }),
+      seg({ startMs: 50_000 }),
+      seg({ startMs: 100_000 }),
+    ]
+    expect(segmentTickFractions(segments, 100_000)).toEqual([0.2, 0.5])
+  })
+})
+
+describe('chapterSeekTargetMs', () => {
+  const segment = seg({ startMs: 42_000 })
+
+  it('resolves the IMAGE region to the segment start', () => {
+    expect(chapterSeekTargetMs(segment, 'image')).toBe(42_000)
+  })
+
+  it('resolves the TEXT region to the SAME segment start - OCR text belongs to the whole segment, not a sub-cue', () => {
+    expect(chapterSeekTargetMs(segment, 'text')).toBe(42_000)
   })
 })

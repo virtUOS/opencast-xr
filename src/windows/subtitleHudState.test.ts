@@ -27,12 +27,12 @@ describe('seekFeedback', () => {
     expect(seekFeedback([], null, 600_000)).toBeNull()
   })
 
-  it('formats M:SS under an hour with no chapter title when there are no segments', () => {
-    expect(seekFeedback([], 90, 600_000)).toEqual({ timeLabel: '1:30', chapterTitle: null })
+  it('formats M:SS under an hour with no chapter title or image when there are no segments', () => {
+    expect(seekFeedback([], 90, 600_000)).toEqual({ timeLabel: '1:30', chapterTitle: null, imageUrl: null })
   })
 
   it('formats H:MM:SS once the episode is >= 1h', () => {
-    expect(seekFeedback([], 3700, 3_700_000)).toEqual({ timeLabel: '1:01:40', chapterTitle: null })
+    expect(seekFeedback([], 3700, 3_700_000)).toEqual({ timeLabel: '1:01:40', chapterTitle: null, imageUrl: null })
   })
 
   it('includes the chapter title covering the preview position, via chaptersState.activeSegmentIndex', () => {
@@ -40,13 +40,34 @@ describe('seekFeedback', () => {
       { startMs: 0, durationMs: 60_000, text: 'Intro' },
       { startMs: 60_000, durationMs: 60_000, text: 'Kapitel 2 (Test)' },
     ]
-    expect(seekFeedback(segments, 90, 600_000)).toEqual({ timeLabel: '1:30', chapterTitle: 'Kapitel 2 (Test)' })
-    expect(seekFeedback(segments, 30, 600_000)).toEqual({ timeLabel: '0:30', chapterTitle: 'Intro' })
+    expect(seekFeedback(segments, 90, 600_000)).toEqual({
+      timeLabel: '1:30',
+      chapterTitle: 'Kapitel 2 (Test)',
+      imageUrl: null,
+    })
+    expect(seekFeedback(segments, 30, 600_000)).toEqual({ timeLabel: '0:30', chapterTitle: 'Intro', imageUrl: null })
   })
 
-  it('returns a null chapterTitle when previewS precedes every segment', () => {
-    const segments: OcSegment[] = [{ startMs: 10_000, durationMs: 60_000, text: 'Later' }]
-    expect(seekFeedback(segments, 1, 600_000)).toEqual({ timeLabel: '0:01', chapterTitle: null })
+  it('includes the matching segment\'s previewUrl when it has one', () => {
+    const segments: OcSegment[] = [
+      { startMs: 0, durationMs: 60_000, text: 'Intro', previewUrl: 'https://x/seg-0.jpg' },
+      { startMs: 60_000, durationMs: 60_000, text: 'Kapitel 2', previewUrl: 'https://x/seg-1.jpg' },
+    ]
+    expect(seekFeedback(segments, 90, 600_000)).toEqual({
+      timeLabel: '1:30',
+      chapterTitle: 'Kapitel 2',
+      imageUrl: 'https://x/seg-1.jpg',
+    })
+  })
+
+  it('is a null imageUrl (not an empty string) when the matching segment has no previewUrl of its own', () => {
+    const segments: OcSegment[] = [{ startMs: 0, durationMs: 60_000, text: 'Intro' }]
+    expect(seekFeedback(segments, 5, 600_000)).toEqual({ timeLabel: '0:05', chapterTitle: 'Intro', imageUrl: null })
+  })
+
+  it('returns a null chapterTitle and imageUrl when previewS precedes every segment', () => {
+    const segments: OcSegment[] = [{ startMs: 10_000, durationMs: 60_000, text: 'Later', previewUrl: 'https://x/y.jpg' }]
+    expect(seekFeedback(segments, 1, 600_000)).toEqual({ timeLabel: '0:01', chapterTitle: null, imageUrl: null })
   })
 
   it('truncates a long chapter title to SEEK_FEEDBACK_CHAPTER_MAX_CHARS', () => {

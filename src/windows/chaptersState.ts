@@ -83,3 +83,53 @@ export function activeSegmentIndex(segments: OcSegment[], currentTimeS: number):
   })
   return best
 }
+
+/**
+ * Fractions in the OPEN interval (0, 1) along the timeline where a chapter
+ * tick mark belongs - one per segment boundary, deliberately EXCLUDING a
+ * boundary that lands exactly at the very start (0) or very end
+ * (`episodeDurationMs`) of the episode: both already coincide with the
+ * track's own rounded end-caps (`DockTransport.tsx`'s `TRACK_HEIGHT_PX`
+ * radius), so a tick there would sit on top of geometry that already marks
+ * "start"/"end" and would add no information. The FIRST segment always
+ * starts at 0 in practice (Opencast's own segmentation, and every synthetic
+ * fixture this app produces), so this is what keeps a real episode's tick
+ * row from always beginning with a redundant mark at the very left edge.
+ *
+ * Returns `[]` for no segments or a non-positive duration (defensive - no
+ * real or synthetic episode has either, but `episodeDurationMs` reaches this
+ * from `episode?.durationMs ?? 0` at the call site, which IS 0 for the one
+ * frame before an episode has loaded).
+ */
+export function segmentTickFractions(segments: OcSegment[], episodeDurationMs: number): number[] {
+  if (episodeDurationMs <= 0) return []
+  const fractions: number[] = []
+  for (const seg of segments) {
+    if (seg.startMs <= 0 || seg.startMs >= episodeDurationMs) continue
+    fractions.push(seg.startMs / episodeDurationMs)
+  }
+  return fractions
+}
+
+/** Which half of a split chapter-tile click landed - see `chapterSeekTargetMs`. */
+export type ChapterClickRegion = 'image' | 'text'
+
+/**
+ * The seek target (ms) for a click on one chapter/segment tile, given which
+ * region was clicked.
+ *
+ * Both regions resolve to the SAME time - the segment's own `startMs` -
+ * unlike `TranscriptWindow`'s cues (see `transcriptState.ts`): a chapter
+ * tile's "text" is OCR text belonging to the WHOLE segment, not a caption
+ * cue with its own independent timestamp inside it, so there is no
+ * finer-grained position to jump to than the segment boundary itself,
+ * whichever half of the tile was pressed. The `region` parameter is still
+ * threaded all the way through (rather than dropped) so the call site
+ * documents which region a click came from, and so a future segment shape
+ * that DOES carry a finer-grained text timestamp has one place to add that
+ * distinction.
+ */
+export function chapterSeekTargetMs(segment: OcSegment, region: ChapterClickRegion): number {
+  void region
+  return segment.startMs
+}
