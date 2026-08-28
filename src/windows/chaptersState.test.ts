@@ -114,6 +114,15 @@ describe('segmentTickFractions', () => {
     expect(segmentTickFractions([seg({ startMs: 10_000 })], -1)).toEqual([])
   })
 
+  it('is inert for a NaN/Infinity duration (malformed Opencast metadata via Number(...))', () => {
+    expect(segmentTickFractions([seg({ startMs: 25_000 })], Number.NaN)).toEqual([])
+    expect(segmentTickFractions([seg({ startMs: 25_000 })], Number.POSITIVE_INFINITY)).toEqual([])
+  })
+
+  it('skips a segment whose own startMs is NaN', () => {
+    expect(segmentTickFractions([seg({ startMs: Number.NaN }), seg({ startMs: 30_000 })], 60_000)).toEqual([0.5])
+  })
+
   it('skips a boundary at exactly 0', () => {
     expect(segmentTickFractions([seg({ startMs: 0 })], 100_000)).toEqual([])
   })

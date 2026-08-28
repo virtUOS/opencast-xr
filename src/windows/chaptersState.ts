@@ -102,10 +102,14 @@ export function activeSegmentIndex(segments: OcSegment[], currentTimeS: number):
  * frame before an episode has loaded).
  */
 export function segmentTickFractions(segments: OcSegment[], episodeDurationMs: number): number[] {
-  if (episodeDurationMs <= 0) return []
+  // Number.isFinite, not just <= 0: parse.ts builds durations via Number(...),
+  // so malformed Opencast metadata arrives here as NaN, and every NaN
+  // comparison is false - a bare <= 0 guard would leak a NaN fraction into
+  // positionLeft. Same convention as transportState.ts.
+  if (!Number.isFinite(episodeDurationMs) || episodeDurationMs <= 0) return []
   const fractions: number[] = []
   for (const seg of segments) {
-    if (seg.startMs <= 0 || seg.startMs >= episodeDurationMs) continue
+    if (!Number.isFinite(seg.startMs) || seg.startMs <= 0 || seg.startMs >= episodeDurationMs) continue
     fractions.push(seg.startMs / episodeDurationMs)
   }
   return fractions
