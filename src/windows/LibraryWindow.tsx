@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useStore } from 'zustand'
 import { Container, Text } from '@react-three/uikit'
+import { ChevronLeft } from '@react-three/uikit-lucide'
 import { DECORATIVE_POINTER_EVENTS, Window } from 'sphere-shell'
 import type { PlayerStoreApi } from '../player/store'
 import { MediaList } from './MediaList'
@@ -13,18 +14,72 @@ import {
 } from './libraryState'
 
 const RETRY_LABEL = 'Erneut versuchen'
-// Plain ASCII "<", not "‹" (U+2039): live verification showed uikit's
-// default font rendering "‹" as a tofu box - see toEpisodeTile's doc comment
-// in libraryState.ts for the same defect and WindowFrame.tsx's precedent.
-const BACK_LABEL = '< Zurück'
+const BACK_LABEL = 'Zurück'
 
+/**
+ * User feedback from a real Quest 3 session: „der Zurück-Button ist sehr
+ * schwer zu treffen und auch schlecht zu sehen, ob er gehighlighted ist."
+ * The old control was a bare `<Text>` in a 4/2 px-padded box - a ~60x17 px
+ * target, and its hover went from no background at all to `#20202a`, a tone
+ * close enough to the window's own background to be nearly invisible through
+ * a headset lens.
+ *
+ * Sized to `BACK_BUTTON_HEIGHT_PX` (44, matching sphere-shell's
+ * `RESIZE_GRIP_HIT_PX` - the codebase's own precedent for "a hit target
+ * enlarged past its visual affordance because a controller ray needs the
+ * room"), with an explicit resting background and a hover that jumps to a
+ * saturated blue with real contrast against it - the same
+ * bright-hover-on-dark-resting idiom `DockTransport.tsx`'s `IconButton` uses
+ * for its ACTIVE state, chosen deliberately over the more subtle breadcrumb-
+ * crumb hover because THIS is the control the previous round's feedback was
+ * about.
+ *
+ * Icon + label are both `DECORATIVE_POINTER_EVENTS` so the whole visual
+ * button is one hit target - see `DockTransport.tsx`'s `IconButton` doc
+ * comment: a press on the glyph and a release on the label are two different
+ * `Object3D`s, and `@pmndrs/pointer-events` only emits `click` when press and
+ * release resolve to the SAME one.
+ */
+const BACK_BUTTON_HEIGHT_PX = 44
+const BACK_BG = '#22222c'
+const BACK_BG_HOVER = '#3f6f9f'
+
+function BackButton({ onPress }: { onPress: () => void }) {
+  return (
+    <Container
+      height={BACK_BUTTON_HEIGHT_PX}
+      paddingX={16}
+      gap={8}
+      flexDirection="row"
+      alignItems="center"
+      borderRadius={8}
+      backgroundColor={BACK_BG}
+      hover={{ backgroundColor: BACK_BG_HOVER }}
+      onClick={(e) => {
+        e.stopPropagation()
+        onPress()
+      }}
+    >
+      <ChevronLeft width={16} height={16} color="#cfd8ff" pointerEvents={DECORATIVE_POINTER_EVENTS} />
+      <Text fontSize={14} color="#cfd8ff" pointerEvents={DECORATIVE_POINTER_EVENTS}>
+        {BACK_LABEL}
+      </Text>
+    </Container>
+  )
+}
+
+// Also enlarged as part of the same feedback round (see BackButton's doc
+// comment above): same class of offender - a small text-only target - even
+// though this one wasn't the one named in the report. paddingY 6 -> 14 takes
+// it from a ~26 px to a ~40 px tall target; the hover colors themselves
+// already had real contrast (`#3a2028` -> `#542c38`) so those are unchanged.
 function ErrorPanel({ message, onRetry }: { message: string; onRetry: () => void }) {
   return (
     <Container flexDirection="column" gap={10} padding={12} alignItems="flex-start">
       <Text fontSize={13} color="#ffd8de">{message}</Text>
       <Container
-        paddingX={12}
-        paddingY={6}
+        paddingX={16}
+        paddingY={14}
         borderRadius={6}
         backgroundColor="#3a2028"
         hover={{ backgroundColor: '#542c38' }}
@@ -84,7 +139,7 @@ export function LibraryWindow({ store }: { store: PlayerStoreApi }) {
   // discarded like any other stale one.
   //
   // Deliberately separate from the effect above rather than folded into it: the
-  // series list still has to be loaded, because „< Zurück" from the scoped
+  // series list still has to be loaded, because „Zurück" from the scoped
   // level 2 goes to level 1 and must find it populated.
   useEffect(() => {
     const target = store.getState().consumeBrowseTarget()
@@ -164,25 +219,16 @@ export function LibraryWindow({ store }: { store: PlayerStoreApi }) {
         ) : (
           <>
             <Container flexDirection="row" alignItems="center" padding={10} gap={10}>
-              <Container
-                paddingX={4}
-                paddingY={2}
-                borderRadius={4}
-                hover={{ backgroundColor: '#20202a' }}
-                onClick={(e) => {
-                  e.stopPropagation()
+              <BackButton
+                onPress={() => {
                   setOpenError(null) // see selectSeriesLevelTile's comment - same stale-banner fix
                   libraryStore.getState().back()
                 }}
-              >
-                <Text fontSize={13} color="#cfd8ff" pointerEvents={DECORATIVE_POINTER_EVENTS}>
-                  {BACK_LABEL}
-                </Text>
-              </Container>
+              />
               {/* Which scope this level-2 list actually is. `EpisodeScope.title`
                   had been carried since Task 11 without ever being rendered,
                   and the dock breadcrumb made that a real gap: arriving here
-                  straight from a „Reihe" crumb, „< Zurück" alone does not say
+                  straight from a „Reihe" crumb, „Zurück" alone does not say
                   which series you landed in. The dock passes the UNtruncated
                   title for exactly this line - and `scopeHeaderLabel` is what
                   cuts it to one line, like every other string this app renders
@@ -194,8 +240,10 @@ export function LibraryWindow({ store }: { store: PlayerStoreApi }) {
               <Container flexDirection="row" alignItems="center" padding={10} gap={10} backgroundColor="#3a2028">
                 <Text fontSize={12} color="#ffd8de" flexGrow={1}>{openError.message}</Text>
                 <Container
-                  paddingX={10}
-                  paddingY={4}
+                  // Same same-class fix as ErrorPanel's retry button above -
+                  // paddingY 4 -> 14.
+                  paddingX={14}
+                  paddingY={14}
                   borderRadius={4}
                   backgroundColor="#542c38"
                   hover={{ backgroundColor: '#6a3a48' }}

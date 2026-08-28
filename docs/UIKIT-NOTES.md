@@ -78,9 +78,14 @@ default font.
 ellipsis), `•`, `→`, `✕`, `–` (en dash).
 
 **Confirmed FINE:** plain ASCII, and accented Latin letters/umlauts (`ü`,
-`ö`, `ä`, `ß`) - e.g. `LibraryWindow.tsx`'s `"< Zurück"` ships with one,
+`ö`, `ä`, `ß`) - e.g. `libraryState.ts`'s `toEpisodeTile` uses `" - "` for
+`"·"` and `MediaList.tsx`'s `truncate` uses `"..."` for `"…"`, both
 live-verified against the real server. The defect is about typographic
 PUNCTUATION outside Latin-1/ASCII, not diacritics in general.
+(`LibraryWindow.tsx`'s back button no longer needs this workaround at all -
+a later round swapped its `"< Zurück"` text hack for a real `ChevronLeft`
+icon, which sidesteps the font defect entirely; see `Icon-based
+alternatives` below.)
 
 **Fix:** use the plain-ASCII substitute for any of the confirmed-missing
 characters above (`<` for `‹`, ` - ` for `·`, `...` for `…`, `x` for `✕`,

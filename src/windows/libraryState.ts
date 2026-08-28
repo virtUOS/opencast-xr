@@ -94,7 +94,7 @@ export interface LibraryState {
    * sound only while the two kinds of fetch could not be in flight at the same
    * time. The dock breadcrumb's „Reihe" crumb broke that: `LibraryWindow` now
    * starts `loadSeries()` AND `enterSeries()` in the same commit (level 1 has
-   * to be loaded because „< Zurück" from the scoped level 2 goes there), so
+   * to be loaded because „Zurück" from the scoped level 2 goes there), so
    * both are running concurrently on the first frame of browse mode.
    *
    * With one slot the failure interleaves silently. The episodes fetch rejects
@@ -158,7 +158,7 @@ export function toEpisodeTile(ep: Episode): EpisodeTile {
  * How long the level-2 header may render before being truncated. Generous
  * compared with `MediaList`'s own 42-character tile titles, and deliberately
  * so: the header has a whole ~50-degree-wide window row to itself (sharing it
- * only with „< Zurück"), whereas a tile title sits beside a preview image. At
+ * only with „Zurück"), whereas a tile title sits beside a preview image. At
  * fontSize 13 in that width, 70 characters still comfortably makes ONE line -
  * which is the only property that actually matters here.
  */
@@ -304,7 +304,7 @@ export function createLibraryState(client: LibraryClient) {
         // being left, and re-running it after switching would silently
         // refill state for a scope the user is no longer looking at. The
         // SERIES slot is untouched - a failed level-1 load is still failed,
-        // and its banner is still what the user meets on „< Zurück".
+        // and its banner is still what the user meets on „Zurück".
         lastFailedEpisodesAction = null
         episodesGeneration += 1
         const gen = episodesGeneration

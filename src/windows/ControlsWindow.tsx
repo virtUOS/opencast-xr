@@ -7,8 +7,8 @@ import { useStartClosed } from './useStartClosed'
 
 // Umlauts are fine here - Task 11's live verification against the real
 // server confirmed uikit's default font renders accented Latin letters
-// (LibraryWindow.tsx's own "< Zurück" ships with one); the tofu-glyph defect
-// documented in docs/UIKIT-NOTES.md entry 3 was specifically about
+// (LibraryWindow.tsx's own "Zurück" label ships with one); the tofu-glyph
+// defect documented in docs/UIKIT-NOTES.md entry 3 was specifically about
 // typographic PUNCTUATION ("‹", "·", "…"), not diacritics.
 const NO_CAPTIONS_HINT = 'Keine Untertitel für diese Aufzeichnung verfügbar.'
 const LABEL_COLOR = '#9a9aa5'

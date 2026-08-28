@@ -178,7 +178,7 @@ describe('scopeHeaderLabel', () => {
   it('is more generous than a MediaList tile title, since it owns a whole row', () => {
     // Guards the intent, not the number: a future edit that "tidies" this down
     // to a tile-sized cut would silently shorten real series names for no
-    // reason - the header shares its row only with „< Zurück".
+    // reason - the header shares its row only with „Zurück".
     expect(SCOPE_HEADER_MAX_CHARS).toBeGreaterThan(42)
   })
 })
@@ -330,7 +330,7 @@ describe('createLibraryState', () => {
   // Review round, I1: LibraryWindow starts loadSeries() AND enterSeries() in
   // the SAME commit now that the dock breadcrumb's „Reihe" crumb can open
   // browse mode straight at level 2 (level 1 still has to load, because
-  // „< Zurück" goes there). That put the two kinds of fetch in flight
+  // „Zurück" goes there). That put the two kinds of fetch in flight
   // together for the first time - which one shared retry slot could not
   // survive.
   describe('concurrent series + episodes fetches (review round I1)', () => {

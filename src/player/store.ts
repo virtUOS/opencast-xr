@@ -53,7 +53,7 @@ export interface StreamState {
  * `LibraryWindow` does not exist yet at that moment (App.tsx swaps the trees
  * on `mode`), so the intent has to survive the switch. `consumeBrowseTarget`
  * is what makes it one-shot - the window applies it once and it is gone, so a
- * later „< Zurück" inside the library goes to level 1 as normal instead of
+ * later „Zurück" inside the library goes to level 1 as normal instead of
  * being dragged back into the series it was opened at.
  *
  * `title` is carried along rather than looked up again: the crumb already knows
