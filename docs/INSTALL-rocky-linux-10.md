@@ -32,6 +32,7 @@ erreichbare Adressen.
 6. [firewalld](#6-firewalld)
 7. [CORS auf dem Opencast-Server](#7-cors-auf-dem-opencast-server)
 8. [Update-Verfahren](#8-update-verfahren)
+9. [Besucherzähler (optional)](#9-besucherzähler-optional)
 
 ## 1. Voraussetzungen
 
@@ -538,3 +539,143 @@ sudo systemctl reload caddy    # Caddy-Weg
 # oder
 sudo systemctl reload nginx    # nginx-Weg
 ```
+
+## 9. Besucherzähler (optional)
+
+Der Player selbst ist ein reines Client-Build ohne eigenen Server-Prozess
+(siehe Einleitung) — für **„wie beliebt ist das eigentlich, aus welchen
+Ländern kommen die Zugriffe, und wird per Headset oder nur im Browser
+zugeschaut"** braucht es zusätzlich einen kleinen, separaten Dienst:
+[`counter/`](../counter/README.md) im selben Repository. Dieser Abschnitt
+ist **optional** — ohne ihn funktioniert der Player unverändert, es fehlt
+nur die Statistik.
+
+**Was gezählt wird und was ausdrücklich nicht:** pro Tag, pro Herkunftsland,
+die Zahl der Seitenaufrufe, eindeutigen Besucher, VR-Sitzungen und
+AR-Sitzungen. **Keine IP-Adresse wird dauerhaft gespeichert** (nur
+kurzzeitig im Arbeitsspeicher für die Länderbestimmung und einen
+Tages-Dedup ausgewertet), und **es wird nicht erfasst, welche Aufzeichnung
+angeschaut wird**. Details und die genaue Datenstruktur:
+[`counter/README.md`](../counter/README.md).
+
+### Installation
+
+Als Build-Benutzer, im bereits geklonten Repository (siehe Abschnitt 2), den
+Dienst nach `/opt/opencast-xr-counter` ausrollen (Beispielpfad — die
+mitgelieferte `opencast-xr-counter.service` erwartet genau diesen; bei einem
+anderen Pfad `WorkingDirectory`/`ExecStart` darin anpassen). `node_modules/`,
+`test/` und `data/` bewusst ausgeschlossen: Abhängigkeiten werden gleich am
+Zielort neu (und nur mit den Produktions-Paketen) installiert, `test/` wird
+im Betrieb nicht gebraucht, und `data/` ist nur der lokale Standardpfad für
+Entwicklung — produktiv liegt der Zustand unter `/var/lib/opencast-xr-counter`
+(siehe systemd-Unit unten):
+
+```bash
+sudo mkdir -p /opt/opencast-xr-counter
+sudo rsync -a --exclude=node_modules --exclude=test --exclude=data \
+  counter/ /opt/opencast-xr-counter/
+cd /opt/opencast-xr-counter
+sudo pnpm install --prod
+```
+
+### GeoIP-Datenbank
+
+Die Länderbestimmung nutzt eine lokale `.mmdb`-Datei von
+[db-ip.com](https://db-ip.com) ("Country Lite", kostenlos, kein Account
+nötig, Lizenz **CC BY 4.0** — die Namensnennung steht bereits auf der
+`/stats`-Seite des Dienstes selbst):
+
+```bash
+sudo /opt/opencast-xr-counter/scripts/update-mmdb.sh \
+  /var/lib/opencast-xr-counter/dbip-country-lite.mmdb
+```
+
+(Das Zielverzeichnis `/var/lib/opencast-xr-counter` legt systemd erst beim
+ersten Start der Unit an — siehe unten. Führen Sie diesen Befehl deshalb
+**nach** dem ersten `systemctl start`, oder legen Sie das Verzeichnis vorher
+manuell mit `sudo mkdir -p` an.) Ein monatliches Auffrischen ist optional
+(IP-Bereiche wandern nur langsam zwischen Ländern) — bei Bedarf denselben
+Befehl erneut ausführen und den Dienst neu starten, siehe der Ausgabe des
+Skripts.
+
+### systemd-Unit
+
+```bash
+sudo cp /opt/opencast-xr-counter/opencast-xr-counter.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now opencast-xr-counter.service
+sudo systemctl status opencast-xr-counter.service
+```
+
+Die Unit nutzt `DynamicUser=yes` (ein eigener, unprivilegierter Benutzer
+nur für diesen Dienst, ohne manuelles Anlegen) und `StateDirectory=
+opencast-xr-counter` (systemd legt `/var/lib/opencast-xr-counter` an und
+räumt es beim Deinstallieren der Unit wieder auf) sowie
+`ProtectSystem=strict` — der Dienst kann außerhalb dieses einen
+Verzeichnisses nichts auf der Platte verändern. Der Dienst bindet **nur**
+`127.0.0.1` (fest im Code, nicht konfigurierbar) — von außen ist er nie
+direkt erreichbar, nur über Caddy/nginx als Reverse Proxy.
+
+### Caddyfile-Ergänzung
+
+Im selben Site-Block wie in Abschnitt 3, **vor** `file_server` (Caddy
+sortiert Direktiven zwar selbst nach Priorität, aber lesbarer ist es so):
+
+```caddyfile
+player.example.org {
+    root * /var/www/opencast-xr
+    encode gzip
+
+    handle /api/hit {
+        reverse_proxy 127.0.0.1:8787
+    }
+
+    handle /stats* {
+        basic_auth {
+            # Benutzername admin, Passwort-Hash mit `caddy hash-password` erzeugen — siehe unten
+            admin JDJhJDE0JAABC...ersetzenSieDiesenHash...
+        }
+        reverse_proxy 127.0.0.1:8787
+    }
+
+    try_files {path} /index.html
+    file_server
+}
+```
+
+`/stats` (und `/stats.json`, deshalb der Wildcard `/stats*`) zeigt
+aggregierte, aber weiterhin nicht für die Öffentlichkeit bestimmte Zahlen —
+**diese Route muss durch `basic_auth` geschützt werden**, der Dienst selbst
+bringt keine eigene Anmeldung mit. Passwort-Hash erzeugen:
+
+```bash
+caddy hash-password
+```
+
+(fragt interaktiv nach dem Passwort und gibt den Hash aus — genau diesen
+in die Caddyfile eintragen, niemals das Klartext-Passwort). Danach:
+
+```bash
+sudo systemctl reload caddy
+```
+
+Für den nginx-Weg (Abschnitt 4) entsprechend, z. B. mit `proxy_pass` auf
+`http://127.0.0.1:8787` für dieselben beiden Pfade und `auth_basic` +
+`auth_basic_user_file` (per `htpasswd` erzeugt) auf dem `/stats`-Block.
+
+### firewalld
+
+Keine Änderung nötig — der Dienst ist über `reverse_proxy`/`proxy_pass`
+ausschließlich von Caddy/nginx auf demselben Host erreichbar (Loopback,
+`127.0.0.1`), es wird kein zusätzlicher Port nach außen geöffnet.
+
+### Startbildschirm-Hinweis
+
+Sobald dieser Dienst läuft, zeigt der Player selbst (Produktions-Build,
+siehe [`README.md`, Abschnitt „Anonymous visitor counter“](../README.md#anonymous-visitor-counter))
+auf dem Startbildschirm automatisch einen kurzen Datenschutzhinweis an —
+dafür ist an dieser Stelle nichts weiter zu tun. Betreiben Sie den Player
+**ohne** diesen Dienst (kein `/api/hit`-Reverse-Proxy in der Caddyfile),
+verhält sich der Player unverändert: Das Senden schlägt fehl, bleibt aber
+für den Betrachter unsichtbar und ohne jede Auswirkung — siehe
+`src/telemetry.ts`.

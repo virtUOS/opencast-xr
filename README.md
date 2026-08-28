@@ -182,6 +182,36 @@ around, both unused in v1 and both fully tested:
 
 Auth itself (session cookie, LTI, JWT) is deliberately out of v1.
 
+## Anonymous visitor counter
+
+A production build (`vite build`, never `pnpm dev`) reports three kinds of
+anonymous "hit" to `/api/hit`, same-origin, via `src/telemetry.ts`:
+
+- `{"kind":"page"}` once per page load, on mount.
+- `{"kind":"vr"}` / `{"kind":"ar"}` the first time that page load actually
+  enters an `immersive-vr` / `immersive-ar` session (read from
+  `xrStore.getState().mode` — the ACTUAL granted mode, not just what was
+  requested). Re-entering the same mode again in the same page load sends
+  nothing further.
+
+This is meant to be received by the small standalone service in
+[`counter/`](counter/README.md) — see that README for exactly what it does
+and does not retain (short version: per-day, per-country totals plus a
+VR/AR/browser split; **no IP address is ever written to disk**, and no
+video/episode identifier is ever sent to it at all). A deployment with no
+such service behind `/api/hit` behaves identically to one with it: every
+send is wrapped so any failure (404, timeout, unreachable host) is silent —
+see `telemetry.ts`'s module doc comment.
+
+Because the beacon only ever runs in a production build, the corresponding
+privacy note on the start screen ("Anonyme Nutzungsstatistik: …", see
+`App.tsx`) is likewise only rendered outside `import.meta.env.DEV`. An
+operator who deploys **without** the counter service can simply not
+reverse-proxy `/api/hit` — the note is accurate either way (a beacon that goes
+nowhere still leaves no video-level or IP-level record), but if you would
+rather not ship it at all in that case, removing both the `useEffect`s and
+the note's `<span>` in `App.tsx` is a three-line diff.
+
 ## Architecture
 
 Three layers, the lower two React-free and fixture-tested:
@@ -269,6 +299,7 @@ and the HUD only ever *displays*).
 | [`docs/UIKIT-NOTES.md`](docs/UIKIT-NOTES.md) | Real `@react-three/uikit` defects and their workarounds. |
 | [`sphere-shell`](https://github.com/rrolf/sphere-shell) | The window-shell API this app is written against. |
 | [`docs/INSTALL-rocky-linux-10.md`](docs/INSTALL-rocky-linux-10.md) | Production deployment as a static site on Rocky Linux 10 (Caddy + Let's Encrypt, alternatively nginx + certbot; SELinux, firewalld) — German, for university admins. |
+| [`counter/README.md`](counter/README.md) | The standalone anonymous visitor counter service: endpoints, what is/isn't retained, GeoIP setup, configuration, tests. |
 
 ## License
 
