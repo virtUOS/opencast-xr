@@ -5,7 +5,7 @@ import type { PlayerStoreApi } from '../player/store'
 import { MediaList } from './MediaList'
 import { PANEL_WINDOW_IDS } from './panelWindows'
 import { useStartClosed } from './useStartClosed'
-import { activeSegmentIndex, segmentTiles } from './chaptersState'
+import { activeSegmentIndex, chapterSeekTargetMs, segmentTiles, type ChapterClickRegion } from './chaptersState'
 
 // Placed at the same azimuth Task 12's video windows reserve for a
 // third-or-later stream's flank slot (`SIDE_AZIMUTH_DEG` in
@@ -39,6 +39,26 @@ const EMPTY_TEXT = 'Keine Kapitel.' // unreachable in practice - App.tsx only mo
  * `chaptersState.ts` - this component is deliberately thin glue over it,
  * the same split `libraryState.ts`/`LibraryWindow.tsx` and
  * `videoWindowState.ts`/`VideoWindows.tsx` already use.
+ *
+ * ## Split click: image vs. text
+ *
+ * „Beim anklicken des Bildes zu dem Kapitel kommen, beim anklicken des
+ * Textes zu der Stelle wo der Untertitel spielt" - this is the ONE window in
+ * the app whose tiles carry both a real preview image (`segment.previewUrl`,
+ * via `MediaListItem.imageUrl`) AND text (the OCR `segment.text`) in the
+ * same row; `TranscriptWindow` has cues' text but no images at all, so this
+ * is where the split lands (see that component's own doc comment for the
+ * literal-vs-actual reasoning). `MediaList`'s `onSelectImage` prop turns the
+ * image and text into two independent hit targets; both are wired here to
+ * `selectSegment`, which resolves the ACTUAL seek target through
+ * `chaptersState.ts`'s `chapterSeekTargetMs` - which, for THIS window,
+ * resolves both regions to the same time (the segment's own start), because
+ * a chapter tile's OCR text belongs to the whole segment rather than to a
+ * sub-cue with its own independent timestamp (unlike `TranscriptWindow`'s
+ * cues - see that function's own doc comment for the full reasoning). The
+ * `region` argument is still threaded through end-to-end rather than
+ * collapsed away, so this fact stays documented at its one source rather
+ * than assumed silently at every call site.
  */
 export function ChaptersWindow({ store }: { store: PlayerStoreApi }) {
   // Starts as a dock tile rather than on the shell - see `panelWindows.ts`.
@@ -53,10 +73,10 @@ export function ChaptersWindow({ store }: { store: PlayerStoreApi }) {
   const activeIndex = useMemo(() => activeSegmentIndex(segments ?? [], currentTimeS), [segments, currentTimeS])
   const activeId = activeIndex >= 0 ? String(activeIndex) : undefined
 
-  const selectSegment = (id: string) => {
+  const selectSegment = (id: string, region: ChapterClickRegion) => {
     const segment = (segments ?? [])[Number(id)]
     if (!segment) return
-    store.getState().engine.seek(segment.startMs / 1000)
+    store.getState().engine.seek(chapterSeekTargetMs(segment, region) / 1000)
   }
 
   // Defensive only: App.tsx gates mounting this window on
@@ -71,7 +91,13 @@ export function ChaptersWindow({ store }: { store: PlayerStoreApi }) {
       size={{ width: 30, height: 30 }}
       position={{ azimuth: CHAPTERS_AZIMUTH_DEG, elevation: PANEL_ELEVATION_DEG }}
     >
-      <MediaList items={items} onSelect={selectSegment} activeId={activeId} emptyText={EMPTY_TEXT} />
+      <MediaList
+        items={items}
+        onSelect={(id) => selectSegment(id, 'text')}
+        onSelectImage={(id) => selectSegment(id, 'image')}
+        activeId={activeId}
+        emptyText={EMPTY_TEXT}
+      />
     </Window>
   )
 }

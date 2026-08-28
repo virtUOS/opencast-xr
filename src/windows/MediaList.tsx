@@ -68,6 +68,37 @@ export interface MediaListProps {
    * subtitle toggle uses.
    */
   activeId?: string
+  /**
+   * Splits each row into two INDEPENDENT hit targets - the leading
+   * image/icon/blank box, and the text column beside it - instead of the
+   * default single hit object covering the whole row. When provided,
+   * clicking the image calls THIS callback and clicking the text column
+   * calls `onSelect`; when omitted (every caller but `ChaptersWindow`), the
+   * row keeps its original one-hit-object behaviour byte-for-byte, and
+   * `onSelect` alone still fires for a click anywhere on the row.
+   *
+   * Added for directive 2 ("beim anklicken des Bildes zu dem Kapitel
+   * kommen, beim anklicken des Textes zu der Stelle wo der Untertitel
+   * spielt") - `ChaptersWindow` is the one window in this app whose tiles
+   * carry both a real preview image AND text (see that component's own doc
+   * comment for why `TranscriptWindow`, which has no images at all, is not
+   * this feature's home).
+   *
+   * The two regions are genuine SEPARATE `Container`s, each with its own
+   * `backgroundColor`/`hover` pair - not two children of one still-single
+   * hit object with `pointerEvents` toggled between them. That distinction
+   * matters: `@pmndrs/pointer-events` resolves a click/hover against
+   * whichever Object3D the ray actually intersects, and two visually
+   * adjacent regions that both belong to the SAME underlying hit object
+   * cannot have their hover states told apart from one another - exactly
+   * the trap `IconButton`'s and this file's own "one hit object" doc
+   * comments describe from the other direction (collapsing several
+   * children INTO one object, on purpose, so a press/release pair always
+   * resolves the same way). Splitting the row is the deliberate opposite
+   * move, so each region's own `hover` genuinely only lights up that
+   * region.
+   */
+  onSelectImage?: (id: string) => void
 }
 
 const RESTING_BG = '#20202a'
@@ -114,9 +145,12 @@ const SUBTITLE_MAX_CHARS = 56
  * tile type of its own - ChaptersWindow (also Task 14) goes through it too,
  * feeding it segment tiles built by `chaptersState.ts`. This component still
  * knows nothing about series/episodes/segments/playability, only about tiles
- * (plus, as of Task 14, which one of them is "active" - see `activeId`).
+ * (plus, as of Task 14, which one of them is "active" - see `activeId`, and
+ * as of the split-click round, whether image and text are two independent
+ * hit targets - see `onSelectImage`).
  */
-export function MediaList({ items, onSelect, onMore, moreLabel, emptyText, activeId }: MediaListProps) {
+export function MediaList({ items, onSelect, onSelectImage, onMore, moreLabel, emptyText, activeId }: MediaListProps) {
+  const splitClick = onSelectImage != null
   return (
     <Container flexGrow={1} flexDirection="column" overflow="scroll" padding={12} gap={8}>
       {items.length === 0 ? (
@@ -125,34 +159,9 @@ export function MediaList({ items, onSelect, onMore, moreLabel, emptyText, activ
         items.map((item) => {
           const active = item.id === activeId
           const visual = tileVisual(item)
-          return (
-          <Container
-            key={item.id}
-            flexDirection="row"
-            gap={10}
-            padding={8}
-            alignItems="center"
-            backgroundColor={active ? ACTIVE_BG : RESTING_BG}
-            borderRadius={6}
-            hover={{ backgroundColor: active ? ACTIVE_BG : HOVER_BG }}
-            onClick={(e) => {
-              e.stopPropagation()
-              onSelect(item.id)
-            }}
-          >
-            {/* Every child of a tile opts OUT of hit-testing, so the tile is
-                ONE hit object. This matters more here than anywhere else in
-                the app: the thumbnail and the text column between them cover
-                essentially the whole tile, so nearly every press lands on a
-                child rather than on the tile - and @pmndrs/pointer-events only
-                emits a `click` when press and release resolve to the exact same
-                Object3D, with no movement tolerance at all. Press on the title,
-                release on the thumbnail, and the tile stays highlighted (hover
-                is emitted on ancestors too) while the click is silently
-                discarded. See sphere-shell's DECORATIVE_POINTER_EVENTS for the
-                quoted upstream code. `pointerEvents` is inherited in uikit, so
-                the value on the column covers both `Text`s under it. */}
-            {visual === 'image' ? (
+
+          const visualBox =
+            visual === 'image' ? (
               <Image
                 src={item.imageUrl} width={TILE_IMAGE_W} height={TILE_IMAGE_H} borderRadius={4}
                 pointerEvents={DECORATIVE_POINTER_EVENTS}
@@ -175,17 +184,100 @@ export function MediaList({ items, onSelect, onMore, moreLabel, emptyText, activ
                 width={TILE_IMAGE_W} height={TILE_IMAGE_H} backgroundColor="#101014" borderRadius={4}
                 pointerEvents={DECORATIVE_POINTER_EVENTS}
               />
-            )}
-            <Container
-              flexDirection="column" gap={2} flexGrow={1}
-              pointerEvents={DECORATIVE_POINTER_EVENTS}
-            >
+            )
+
+          const textBlock = (
+            <>
               <Text fontSize={14} color="#ffffff">{truncate(item.title, TITLE_MAX_CHARS)}</Text>
               {item.subtitle != null && (
                 <Text fontSize={11} color="#9a9aa5">{truncate(item.subtitle, SUBTITLE_MAX_CHARS)}</Text>
               )}
+            </>
+          )
+
+          if (!splitClick) {
+            return (
+              <Container
+                key={item.id}
+                flexDirection="row"
+                gap={10}
+                padding={8}
+                alignItems="center"
+                backgroundColor={active ? ACTIVE_BG : RESTING_BG}
+                borderRadius={6}
+                hover={{ backgroundColor: active ? ACTIVE_BG : HOVER_BG }}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onSelect(item.id)
+                }}
+              >
+                {/* Every child of a tile opts OUT of hit-testing, so the tile is
+                    ONE hit object. This matters more here than anywhere else in
+                    the app: the thumbnail and the text column between them cover
+                    essentially the whole tile, so nearly every press lands on a
+                    child rather than on the tile - and @pmndrs/pointer-events only
+                    emits a `click` when press and release resolve to the exact same
+                    Object3D, with no movement tolerance at all. Press on the title,
+                    release on the thumbnail, and the tile stays highlighted (hover
+                    is emitted on ancestors too) while the click is silently
+                    discarded. See sphere-shell's DECORATIVE_POINTER_EVENTS for the
+                    quoted upstream code. `pointerEvents` is inherited in uikit, so
+                    the value on the column covers both `Text`s under it. */}
+                {visualBox}
+                <Container
+                  flexDirection="column" gap={2} flexGrow={1}
+                  pointerEvents={DECORATIVE_POINTER_EVENTS}
+                >
+                  {textBlock}
+                </Container>
+              </Container>
+            )
+          }
+
+          // Split-click mode (`onSelectImage` provided - ChaptersWindow only,
+          // see the prop's own doc comment): the image and text regions are
+          // now two GENUINE separate hit objects, each carrying its own
+          // background/hover pair, rather than two children opted OUT of
+          // hit-testing under one shared row. The outer row is a plain
+          // grouping Container with no background/hover/onClick of its own -
+          // giving it one would put a THIRD, larger hit object underneath the
+          // other two, which is exactly the "same underlying Object3D"
+          // bleed this mode exists to avoid.
+          return (
+            <Container key={item.id} flexDirection="row" gap={10} alignItems="stretch">
+              <Container
+                padding={4}
+                borderRadius={6}
+                alignItems="center"
+                justifyContent="center"
+                backgroundColor={active ? ACTIVE_BG : RESTING_BG}
+                hover={{ backgroundColor: active ? ACTIVE_BG : HOVER_BG }}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onSelectImage(item.id)
+                }}
+              >
+                {visualBox}
+              </Container>
+              <Container
+                flexDirection="column"
+                gap={2}
+                flexGrow={1}
+                padding={8}
+                borderRadius={6}
+                justifyContent="center"
+                backgroundColor={active ? ACTIVE_BG : RESTING_BG}
+                hover={{ backgroundColor: active ? ACTIVE_BG : HOVER_BG }}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onSelect(item.id)
+                }}
+              >
+                <Container flexDirection="column" gap={2} pointerEvents={DECORATIVE_POINTER_EVENTS}>
+                  {textBlock}
+                </Container>
+              </Container>
             </Container>
-          </Container>
           )
         })
       )}
