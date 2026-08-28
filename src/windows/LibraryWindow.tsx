@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useStore } from 'zustand'
 import { Container, Text } from '@react-three/uikit'
 import { ChevronLeft } from '@react-three/uikit-lucide'
+import { List } from '@react-three/uikit-lucide'
 import { DECORATIVE_POINTER_EVENTS, Window } from 'sphere-shell'
 import type { PlayerStoreApi } from '../player/store'
 import { MediaList } from './MediaList'
@@ -175,7 +176,22 @@ export function LibraryWindow({ store }: { store: PlayerStoreApi }) {
     [store],
   )
 
-  const seriesItems = useMemo(() => seriesTiles(series), [series])
+  // User feedback: „Serien haben glaube ich nie ein Vorschaubild." True by
+  // construction, not a fetch bug - the Search API's `/series` endpoint
+  // returns Dublin Core (`id`/`title` only, see `parseSeries` in
+  // `opencast/parse.ts`), no attachments at all, so a series `imageUrl` could
+  // never exist without an extra per-series request this window doesn't (and
+  // per the brief, must not) make. `MediaList`'s old fallback for a missing
+  // `imageUrl` was a plain grey box meant for a thumbnail that SHOULD be
+  // there - exactly wrong for something that never will be, hence the
+  // designed `placeholderIcon` panel instead. `List` matches the icon the
+  // dock breadcrumb already uses for "this leads to a list of episodes" (see
+  // `DockTransport.tsx`'s `opensSeries` crumb), so a series-shaped tile reads
+  // the same way in both places.
+  const seriesItems = useMemo(
+    () => seriesTiles(series).map((tile) => ({ ...tile, placeholderIcon: List })),
+    [series],
+  )
 
   const selectSeriesLevelTile = useCallback(
     (id: string) => {

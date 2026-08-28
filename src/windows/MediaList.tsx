@@ -1,4 +1,5 @@
-import { Container, Text, Image } from '@react-three/uikit'
+import type { ComponentType } from 'react'
+import { Container, Text, Image, type SvgProperties } from '@react-three/uikit'
 import { DECORATIVE_POINTER_EVENTS } from 'sphere-shell'
 
 export interface MediaListItem {
@@ -6,6 +7,33 @@ export interface MediaListItem {
   title: string
   subtitle?: string
   imageUrl?: string
+  /**
+   * Rendered on a tinted panel instead of the plain placeholder box when
+   * `imageUrl` is absent AND the caller wants to say so ON PURPOSE - e.g. a
+   * series tile, which never has a thumbnail at all (the Search API's series
+   * listing carries only Dublin Core `id`/`title`, no attachments - see
+   * `libraryState.ts`'s `seriesTiles`).
+   *
+   * Left `undefined` (not just falsy) for a tile whose thumbnail SHOULD
+   * exist but happens not to - an episode with no preview attachment, say -
+   * so that case keeps the old plain grey box rather than being dressed up
+   * as a deliberate design choice it isn't. See `tileVisual`.
+   */
+  placeholderIcon?: ComponentType<SvgProperties>
+}
+
+/**
+ * Which of the three ways a tile's leading box can render. Pulled out as its
+ * own pure function (rather than inlined in the JSX below) so the
+ * image/icon/blank decision is unit-testable without rendering uikit, which
+ * jsdom cannot do meaningfully - see this file's own doc comment.
+ */
+export type TileVisual = 'image' | 'icon' | 'blank'
+
+export function tileVisual(item: Pick<MediaListItem, 'imageUrl' | 'placeholderIcon'>): TileVisual {
+  if (item.imageUrl) return 'image'
+  if (item.placeholderIcon) return 'icon'
+  return 'blank'
 }
 
 export interface MediaListProps {
@@ -49,6 +77,12 @@ const ACTIVE_BG = '#3a4f7f'
 const TILE_IMAGE_W = 96
 const TILE_IMAGE_H = 54
 
+/** The tinted "no thumbnail, on purpose" panel - see `placeholderIcon`. Deliberately
+ * NOT `#101014` (the plain missing-image box below): that grey is a broken/absent
+ * state, and reusing it here would make a designed placeholder read as one too. */
+const PLACEHOLDER_BG = '#232c3a'
+const PLACEHOLDER_ICON_COLOR = '#7f93c9'
+
 // @react-three/uikit 1.0.74's Text has a MANY-WRAPPED-LINES defect: a Text
 // that's forced to wrap across more than a couple of lines renders
 // incorrectly (see Dock.tsx/MarkdownContent.tsx's precedent - both keep tile
@@ -70,14 +104,17 @@ const TITLE_MAX_CHARS = 42
 const SUBTITLE_MAX_CHARS = 56
 
 /**
- * Reusable uikit tile list: a scrollable column of Image+two-line-Text tiles
- * with a hover cue, and an optional "Mehr laden" tail button. Used by
- * LibraryWindow at both the series and the episode level; SeriesWindow
- * (Task 14) reuses it directly with no wrapper tile type of its own -
- * ChaptersWindow (also Task 14) goes through it too, feeding it segment
- * tiles built by `chaptersState.ts`. This component still knows nothing
- * about series/episodes/segments/playability, only about tiles (plus, as of
- * Task 14, which one of them is "active" - see `activeId`).
+ * Reusable uikit tile list: a scrollable column of leading-box+two-line-Text
+ * tiles with a hover cue, and an optional "Mehr laden" tail button. The
+ * leading box is a real `Image` when `imageUrl` is set, the tinted
+ * `placeholderIcon` panel when the caller says a thumbnail was never going to
+ * exist, or the plain grey box for a thumbnail that merely failed to show up
+ * - see `tileVisual`. Used by LibraryWindow at both the series and the
+ * episode level; SeriesWindow (Task 14) reuses it directly with no wrapper
+ * tile type of its own - ChaptersWindow (also Task 14) goes through it too,
+ * feeding it segment tiles built by `chaptersState.ts`. This component still
+ * knows nothing about series/episodes/segments/playability, only about tiles
+ * (plus, as of Task 14, which one of them is "active" - see `activeId`).
  */
 export function MediaList({ items, onSelect, onMore, moreLabel, emptyText, activeId }: MediaListProps) {
   return (
@@ -87,6 +124,7 @@ export function MediaList({ items, onSelect, onMore, moreLabel, emptyText, activ
       ) : (
         items.map((item) => {
           const active = item.id === activeId
+          const visual = tileVisual(item)
           return (
           <Container
             key={item.id}
@@ -114,11 +152,24 @@ export function MediaList({ items, onSelect, onMore, moreLabel, emptyText, activ
                 discarded. See sphere-shell's DECORATIVE_POINTER_EVENTS for the
                 quoted upstream code. `pointerEvents` is inherited in uikit, so
                 the value on the column covers both `Text`s under it. */}
-            {item.imageUrl ? (
+            {visual === 'image' ? (
               <Image
                 src={item.imageUrl} width={TILE_IMAGE_W} height={TILE_IMAGE_H} borderRadius={4}
                 pointerEvents={DECORATIVE_POINTER_EVENTS}
               />
+            ) : visual === 'icon' ? (
+              <Container
+                width={TILE_IMAGE_W} height={TILE_IMAGE_H} backgroundColor={PLACEHOLDER_BG} borderRadius={4}
+                alignItems="center" justifyContent="center"
+                pointerEvents={DECORATIVE_POINTER_EVENTS}
+              >
+                {item.placeholderIcon && (
+                  <item.placeholderIcon
+                    width={20} height={20} color={PLACEHOLDER_ICON_COLOR}
+                    pointerEvents={DECORATIVE_POINTER_EVENTS}
+                  />
+                )}
+              </Container>
             ) : (
               <Container
                 width={TILE_IMAGE_W} height={TILE_IMAGE_H} backgroundColor="#101014" borderRadius={4}
