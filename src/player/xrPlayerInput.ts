@@ -553,7 +553,8 @@ const NO_SEGMENTS: OcSegment[] = []
  *
  * ## Order within a frame
  *
- * 1. **No session** — reset everything; clear a preview if one is showing, so
+ * 1. **No session** — reset everything; clear a preview ONLY if THIS
+ *    component's own scrub gesture was the one showing it (see below), so
  *    taking the headset off mid-scrub cannot strand the HUD.
  * 2. **Play/pause**, before the episode gate: it is the one binding that is
  *    meaningful with no recording open, and `setPlaying` is a documented no-op
@@ -561,13 +562,43 @@ const NO_SEGMENTS: OcSegment[] = []
  * 3. **Chapter flick**, before the scrub, so a diagonal push that clears the
  *    flick threshold resolves as ONE outcome.
  * 4. **Horizontal scrub** otherwise.
+ *
+ * ## The no-session clear must be ownership-gated, not `previewS !== null`
+ *
+ * `seekPreviewS` is one shared store field with (at least) two independent
+ * writers: this reducer's own stick scrub, and `DockTransport.tsx`'s mouse
+ * hover/drag over the timeline (added later - see that file's own doc
+ * comment on the hover-preview feature). `useFrame` runs every frame
+ * regardless of whether a session exists, so with no session (the ordinary
+ * desktop/magic-window view - the ONLY view available before a headset is
+ * ever donned, and the one this repo's own live verification runs in) this
+ * branch ran on EVERY frame, and used to clear ANY non-null `previewS` it
+ * saw - including one the dock's mouse hover had just written. Since a
+ * frame is ~8-16 ms, the dock's hover preview was wiped back to `null`
+ * within one frame of being set: perceptibly, it never appeared at all.
+ * Live-verified: `store.getState().setSeekPreview(65)` reads back 65
+ * immediately, but reads back `null` after a single forced frame
+ * (`pump(1)`) with no XR session - reproducing the reported „Kapitelmarken
+ * und Preview Bilder" symptom exactly, independent of chapter data.
+ *
+ * The original intent - "taking the headset off mid-scrub must not strand
+ * the HUD showing a frozen preview" - only applies to a preview THIS
+ * reducer's own gesture put there, which is exactly what
+ * `state.seek.targetS !== null` records (non-null for as long as a stick
+ * scrub is in flight; the branch below runs before `state` is replaced with
+ * the reset `INITIAL_XR_PLAYER_INPUT_STATE`, so it still reflects the PRIOR
+ * frame's gesture). Gating on that instead of on `input.previewS` leaves a
+ * foreign preview (mouse hover, or anything else that might reuse this
+ * field later) alone whenever this component never started a gesture of
+ * its own - which is always true outside an XR session, since the stick
+ * that drives `state.seek` does not exist without one.
  */
 export function stepPlayerFrame(
   state: XRPlayerInputState,
   input: XRPlayerFrameInput,
 ): { state: XRPlayerInputState; effects: XRPlayerEffect[] } {
   if (!input.hasSession) {
-    const effects: XRPlayerEffect[] = input.previewS !== null ? [{ type: 'clearPreview' }] : []
+    const effects: XRPlayerEffect[] = state.seek.targetS !== null ? [{ type: 'clearPreview' }] : []
     return { state: INITIAL_XR_PLAYER_INPUT_STATE, effects }
   }
 

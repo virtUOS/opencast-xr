@@ -635,6 +635,27 @@ describe('stepPlayerFrame', () => {
     expect(again.effects).toEqual([])
   })
 
+  it('does not clobber a preview it never set when there is no session (the dock\'s mouse hover)', () => {
+    // The reported bug: DockTransport.tsx's mouse hover/drag over the
+    // timeline writes the SAME store.seekPreviewS field this reducer does,
+    // and `useFrame` runs every frame regardless of whether an XR session
+    // exists - i.e. on every ordinary desktop/magic-window view, which is
+    // the ONLY view available before a headset is ever donned. This
+    // component must never have started a stick gesture of its own here
+    // (`state.seek.targetS` is null from `INITIAL_XR_PLAYER_INPUT_STATE`),
+    // so a `previewS` arriving from elsewhere must be left alone - unlike
+    // the "stranded scrub" case above, where THIS reducer's own gesture
+    // really was in flight when the session ended.
+    const d = driver()
+    const result = d.frame({ hasSession: false, previewS: 42 })
+    expect(result.effects).toEqual([])
+
+    // Holds across many consecutive no-session frames too, not just one.
+    for (let i = 0; i < 10; i++) {
+      expect(d.frame({ hasSession: false, previewS: 42 }).effects).toEqual([])
+    }
+  })
+
   it('does nothing at all on a resting frame', () => {
     const d = driver()
     expect(d.frame().effects).toEqual([])
