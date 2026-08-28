@@ -1,0 +1,22 @@
+{
+  "name": "opencast-xr-counter",
+  "version": "0.1.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "author": "Rüdiger Rolf <rrolf@uni-osnabrueck.de>",
+  "type": "module",
+  "description": "Standalone anonymous visitor counter service for the Opencast-XR player (country + VR/AR split, no IP retained).",
+  "scripts": {
+    "start": "node server.js",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "maxmind": "^4.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.8.0",
+    "vitest": "^3.0.0"
+  }
+}

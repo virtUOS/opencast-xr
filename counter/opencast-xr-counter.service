@@ -1,0 +1,67 @@
+# systemd unit for the Opencast-XR visitor counter service.
+#
+# Install (see docs/INSTALL-rocky-linux-10.md, section 9, for the full
+# walkthrough):
+#
+#   sudo cp counter/opencast-xr-counter.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now opencast-xr-counter.service
+#
+# Assumes the counter/ directory (this file's own directory, with
+# `pnpm install --prod` already run in it) has been deployed to
+# /opt/opencast-xr-counter — adjust ExecStart/WorkingDirectory if you deploy
+# elsewhere.
+#
+# Hardening notes:
+#   - DynamicUser=yes: a unique, unprivileged, non-login system user is
+#     created and destroyed for this unit alone — no shared "www-data"-style
+#     account, no need to pre-create one.
+#   - StateDirectory=opencast-xr-counter: systemd creates and owns
+#     /var/lib/opencast-xr-counter (mode 0700, owned by the DynamicUser),
+#     which is the only path this service is allowed to write to. Both the
+#     aggregate state file and the downloaded GeoIP database live under it —
+#     see COUNTER_STATE_FILE / COUNTER_MMDB_PATH below.
+#   - ProtectSystem=strict + ProtectHome=yes: the entire filesystem is
+#     read-only to this unit except $STATE_DIRECTORY.
+#   - No network restriction beyond binding 127.0.0.1 (enforced in
+#     server.js itself, not by systemd) — Caddy reverse-proxies to it, see
+#     the install guide's Caddyfile stanza. Nothing about this unit opens a
+#     new firewall hole.
+
+[Unit]
+Description=Opencast-XR anonymous visitor counter
+After=network.target
+Documentation=https://github.com/virtUOS/opencast-xr/blob/main/docs/INSTALL-rocky-linux-10.md
+
+[Service]
+Type=simple
+DynamicUser=yes
+StateDirectory=opencast-xr-counter
+WorkingDirectory=/opt/opencast-xr-counter
+ExecStart=/usr/bin/node /opt/opencast-xr-counter/server.js
+Environment=COUNTER_PORT=8787
+Environment=COUNTER_STATE_FILE=/var/lib/opencast-xr-counter/state.json
+Environment=COUNTER_MMDB_PATH=/var/lib/opencast-xr-counter/dbip-country-lite.mmdb
+Environment=COUNTER_TRUST_PROXY=1
+Restart=on-failure
+RestartSec=5
+
+# Hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target
