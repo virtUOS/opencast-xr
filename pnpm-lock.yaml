@@ -27,8 +27,8 @@ importers:
         specifier: ^19.0.0
         version: 19.2.8(react@19.2.8)
       sphere-shell:
-        specifier: ^0.3.1
-        version: 0.3.1(@react-three/fiber@9.7.0(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(three@0.175.0))(@react-three/uikit@1.0.75(@react-three/fiber@9.7.0(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(three@0.175.0))(@types/react@19.2.18)(react@19.2.8)(three@0.175.0)(use-sync-external-store@1.6.0(react@19.2.8)))(@react-three/xr@6.6.30(@react-three/fiber@9.7.0(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(three@0.175.0))(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(three@0.175.0))(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(three@0.175.0)(use-sync-external-store@1.6.0(react@19.2.8))
+        specifier: ^0.3.2
+        version: 0.3.2(@react-three/fiber@9.7.0(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(three@0.175.0))(@react-three/uikit@1.0.75(@react-three/fiber@9.7.0(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(three@0.175.0))(@types/react@19.2.18)(react@19.2.8)(three@0.175.0)(use-sync-external-store@1.6.0(react@19.2.8)))(@react-three/xr@6.6.30(@react-three/fiber@9.7.0(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(three@0.175.0))(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(three@0.175.0))(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(three@0.175.0)(use-sync-external-store@1.6.0(react@19.2.8))
       three:
         specifier: ^0.175.0
         version: 0.175.0
@@ -1016,8 +1016,8 @@ packages:
     resolution: {integrity: sha512-UXWMKhLOwVKb728IUtQPXxfYU+usdybtUrK/8uGE8CQMvrhOpwvzDBwj0QhSL7MQc7vIsISBG8VQ8+IDQxpfQA==}
     engines: {node: '>=0.10.0'}
 
-  sphere-shell@0.3.1:
-    resolution: {integrity: sha512-9PdDMV9er4ckXB9XFNWCJDtlrWBEfQYSmO262jMJzTQAkQPpb35XZM7SjIzv7FJdtO704z6jjWIMpkASulT50g==}
+  sphere-shell@0.3.2:
+    resolution: {integrity: sha512-dBMaJ8mNSN5Q/pJa0DW25Nu7r80wOZWUnX6ez4hguGHhOmK02+4f6lNadJGlBvpgD9s8ip5kXPqawcRzWLByBQ==}
     peerDependencies:
       '@react-three/fiber': ^9.0.0
       '@react-three/uikit': ^1.0.74
@@ -2242,7 +2242,7 @@ snapshots:
 
   source-map-js@1.2.1: {}
 
-  sphere-shell@0.3.1(@react-three/fiber@9.7.0(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(three@0.175.0))(@react-three/uikit@1.0.75(@react-three/fiber@9.7.0(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(three@0.175.0))(@types/react@19.2.18)(react@19.2.8)(three@0.175.0)(use-sync-external-store@1.6.0(react@19.2.8)))(@react-three/xr@6.6.30(@react-three/fiber@9.7.0(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(three@0.175.0))(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(three@0.175.0))(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(three@0.175.0)(use-sync-external-store@1.6.0(react@19.2.8)):
+  sphere-shell@0.3.2(@react-three/fiber@9.7.0(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(three@0.175.0))(@react-three/uikit@1.0.75(@react-three/fiber@9.7.0(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(three@0.175.0))(@types/react@19.2.18)(react@19.2.8)(three@0.175.0)(use-sync-external-store@1.6.0(react@19.2.8)))(@react-three/xr@6.6.30(@react-three/fiber@9.7.0(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(three@0.175.0))(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(three@0.175.0))(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(three@0.175.0)(use-sync-external-store@1.6.0(react@19.2.8)):
     dependencies:
       '@react-three/fiber': 9.7.0(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(three@0.175.0)
       '@react-three/uikit': 1.0.75(@react-three/fiber@9.7.0(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(three@0.175.0))(@types/react@19.2.18)(react@19.2.8)(three@0.175.0)(use-sync-external-store@1.6.0(react@19.2.8))
