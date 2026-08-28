@@ -3,7 +3,12 @@ import coffeeRunFixture from '../opencast/__fixtures__/episode-coffee-run.json'
 import { parseEpisodeResponse } from '../opencast/parse'
 import { selectStreams } from '../opencast/selectTracks'
 import type { Episode, OcTrack } from '../opencast/types'
-import { TEST_CHAPTER_STARTS_S, buildTestChapters, syntheticDualStream } from './syntheticDualStream'
+import {
+  TEST_CHAPTER_STARTS_S,
+  buildTestChapters,
+  buildTestLongCues,
+  syntheticDualStream,
+} from './syntheticDualStream'
 
 function coffeeRun(): Episode {
   const [episode] = parseEpisodeResponse(coffeeRunFixture)
@@ -117,5 +122,26 @@ describe('buildTestChapters', () => {
     const texts = buildTestChapters(episodeWith([videoTrack({})])).map((s) => s.text)
     expect(new Set(texts).size).toBe(texts.length)
     expect(texts.every((t) => t.length > 0)).toBe(true)
+  })
+})
+
+describe('buildTestLongCues', () => {
+  it('produces cues long enough to wrap multiple visual lines, none overlapping in time', () => {
+    const cues = buildTestLongCues()
+    expect(cues.length).toBeGreaterThan(0)
+    for (const cue of cues) {
+      // "Long enough to wrap" per this file's own doc comment - a loose
+      // floor (not a precise line-count prediction, which depends on the
+      // rendered column width) that would catch an accidental swap for
+      // short placeholder text.
+      expect(cue.text.length).toBeGreaterThan(80)
+      expect(cue.endMs).toBeGreaterThan(cue.startMs)
+    }
+    // Sequential, non-overlapping - see chapterSeekTarget-style consumers,
+    // and activeCueIndex, which assume a cue's [startMs, endMs) range does
+    // not collide with its neighbours'.
+    for (let i = 1; i < cues.length; i++) {
+      expect(cues[i].startMs).toBeGreaterThanOrEqual(cues[i - 1].endMs)
+    }
   })
 })

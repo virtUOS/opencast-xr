@@ -177,6 +177,20 @@ export function App() {
     [devClient],
   )
 
+  // Same pattern again - see `dev/syntheticDualStream.ts`'s `buildTestLongCues`
+  // doc comment for why this exists: reproducing „Die Zeilen im Transkript
+  // überlagern sich leider immer noch" needs cues long enough to wrap 2-3
+  // visual lines each, and neither develop.opencast.org's nor explore's real
+  // fixtures are guaranteed to have one open at hand during a live check.
+  const [testLongCues, setTestLongCues] = useState(false)
+  const toggleTestLongCues = useCallback(
+    (on: boolean) => {
+      if (devClient) devClient.testLongCues = on
+      setTestLongCues(on)
+    },
+    [devClient],
+  )
+
   const [xrStatus, setXrStatus] = useState<XrStatus>({ kind: 'checking' })
   const [enterError, setEnterError] = useState<string | null>(null)
 
@@ -448,6 +462,23 @@ export function App() {
               onChange={(e) => toggleTestChapters(e.target.checked)}
             />
             Kapitel (Test)
+          </label>
+        )}
+        {devClient && (
+          <label
+            style={{
+              color: '#e8e8ee', background: '#22222a', border: '1px solid #44444e',
+              borderRadius: 4, padding: '6px 10px', font: '12px system-ui, sans-serif',
+              display: 'flex', gap: 6, alignItems: 'center',
+            }}
+            title="Ersetzt das Transkript der nächsten geöffneten Aufzeichnung durch fünf lange, mehrzeilige Testzeilen — nur für Entwicklung."
+          >
+            <input
+              type="checkbox"
+              checked={testLongCues}
+              onChange={(e) => toggleTestLongCues(e.target.checked)}
+            />
+            Lange Zeilen (Test)
           </label>
         )}
         {xrStatus.kind !== 'ready' && (
