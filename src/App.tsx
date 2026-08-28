@@ -22,6 +22,7 @@ import {
   type BackgroundMode,
 } from './backgroundMode'
 import { backgroundPrefsStorage, readBackgroundPrefs, writeBackgroundPrefs } from './backgroundPrefs'
+import { reportPageLoadHit } from './telemetry'
 import { createPlayerStore } from './player/store'
 import { LibraryWindow } from './windows/LibraryWindow'
 import { VideoWindows } from './windows/VideoWindows'
@@ -213,6 +214,35 @@ export function App() {
     }
   }, [])
 
+  // Anonymous visitor beacon (see src/telemetry.ts and counter/README.md for
+  // the service this reports to, and the design rationale — country + VR/AR
+  // split only, no IP retained). Production builds only: `import.meta.env.DEV`
+  // is Vite's static build-mode flag (see xrStore.ts's identical guard on the
+  // WebXR emulator for the same reasoning), so `pnpm dev` never sends
+  // anything and a `vite build` is the only build that ever does. One 'page'
+  // hit per page load, fired once on mount — reportPageLoadHit's own
+  // one-shot-per-kind guard (telemetry.ts's `shouldSendHit`) makes a second
+  // call here harmless if this effect were ever to re-run.
+  useEffect(() => {
+    if (import.meta.env.DEV) return
+    reportPageLoadHit('page')
+  }, [])
+
+  // The 'vr'/'ar' beacon, sent the first time THIS page load's xrStore
+  // reports the matching session mode actually being granted — reading
+  // `xrStore.getState().mode` (not `effectiveBackground` below, which is
+  // only a REQUEST) is the same "actual session mode" seam `enterVR` itself
+  // relies on via `sessionModeFor`. Re-entering the same mode later in this
+  // page load sends nothing further (see telemetry.ts's module doc comment
+  // on why that's the deliberate choice, not a gap).
+  useEffect(() => {
+    if (import.meta.env.DEV) return
+    return xrStore.subscribe((state) => {
+      if (state.mode === 'immersive-vr') reportPageLoadHit('vr')
+      else if (state.mode === 'immersive-ar') reportPageLoadHit('ar')
+    })
+  }, [])
+
   // What is behind the windows once a session starts. 'black' (the player's
   // original, and only, look) is the default, chosen on the start overlay or
   // flipped from the dock's three-dot menu (see `chooseBackgroundRow` below -
@@ -322,7 +352,8 @@ export function App() {
 
   return (
     <div style={{ position: 'absolute', inset: 0 }}>
-      <div style={{ position: 'absolute', zIndex: 1, padding: 8, display: 'flex', gap: 8, alignItems: 'center' }}>
+      <div style={{ position: 'absolute', zIndex: 1, padding: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
         {/* The background choice, decided here rather than in-session:
             sphere-shell 0.3.0's dock „..." menu takes no app-supplied rows
             (see backgroundMode.ts's doc comment) - so the start overlay is
@@ -434,6 +465,22 @@ export function App() {
             {xrStatus.kind === 'checking'
               ? 'No VR: checking…'
               : `No VR: ${xrStatus.reason} · secureContext=${String(window.isSecureContext)} · navigator.xr=${'xr' in navigator && navigator.xr != null ? 'yes' : 'no'} · ${location.protocol}//${location.hostname}`}
+          </span>
+        )}
+      </div>
+        {/* Only shown when the beacon (telemetry.ts) can actually be active -
+            a dev build never sends it (see the useEffect above), so a note
+            about it here would be misleading noise while developing. Styled
+            as unobtrusive fine print, consistent with (but visually lighter
+            than) the status bar above it - this is disclosure, not a
+            warning. See counter/README.md and telemetry.ts for what is and
+            isn't collected; the wording itself was agreed directly with the
+            operator (see docs/INSTALL-rocky-linux-10.md's counter section
+            and README.md for the same text in context). */}
+        {!import.meta.env.DEV && (
+          <span style={{ color: '#8a8a96', font: '11px system-ui, sans-serif', maxWidth: '60vw' }}>
+            Anonyme Nutzungsstatistik: gezählt werden nur Tag, Herkunftsland und ob per VR-Brille oder Browser –
+            ohne Cookies, ohne Speicherung von IP-Adressen.
           </span>
         )}
       </div>
