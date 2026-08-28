@@ -202,6 +202,11 @@ export function MediaList({ items, onSelect, onSelectImage, onMore, moreLabel, e
                 flexDirection="row"
                 gap={10}
                 padding={8}
+                // Same UIKIT-NOTES entry-8 guard as the split-click branch
+                // below: auto-height rows in a column default to
+                // flexShrink 1 and get squashed as the list grows - the
+                // library and series lists are exactly the ones that grow.
+                flexShrink={0}
                 alignItems="center"
                 backgroundColor={active ? ACTIVE_BG : RESTING_BG}
                 borderRadius={6}

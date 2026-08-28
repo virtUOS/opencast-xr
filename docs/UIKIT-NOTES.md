@@ -382,12 +382,14 @@ each row's own text length (ruling out "some individual row mismeasured its
 own text" and pointing at a GLOBAL layout effect over the whole scrolling
 column instead).
 
-**Root cause:** not traced into `@pmndrs/uikit`'s own Yoga integration source,
-but the SHAPE of the bug matches the CSS flexbox default exactly: a flex
-child's `flexShrink` defaults to `1` (allowed to shrink) unless set
-otherwise, and a Yoga column with `overflow: scroll` does not appear to
-implicitly opt its children out of that default the way a browser's
-`overflow: auto`/`scroll` effectively does for block-level content. With N
+**Root cause:** since traced into `@pmndrs/uikit@1.0.75`'s own source: its
+Yoga config runs `setUseWebDefaults(true)` (`dist/flex/yoga.js`), which makes
+every flex child's `flexShrink` default to `1` (web semantics); uikit's own
+commit-time guard (`dist/flex/node.js`) force-sets `flexShrink: 0` only for a
+child with an EXPLICIT `height` prop inside a column - an auto-height row
+falls through to shrinkable. Note the trigger is any column-direction parent
+with auto-height children, scrolling or not; the scroll case is just where
+the squash becomes visible as overlap. With N
 auto-height children all shrinkable and a FIXED cross-axis box (the window's
 own declared `size`), Yoga's flex-shrink resolution distributes the "not
 enough room" deficit across every child proportionally to its own basis -
