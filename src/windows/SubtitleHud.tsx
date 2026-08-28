@@ -24,13 +24,62 @@ const HUD_BG_OPACITY = 0.4
  * for why the factors are all well under 1, and why scaling all of these
  * together is a uniform scale rather than a reflow.
  */
-const CAPTION_DESIGN = {
+export const CAPTION_DESIGN = {
   fontSize: 22,
   paddingX: 20,
   paddingY: 12,
   borderRadius: 10,
   maxWidth: 520,
 }
+
+/**
+ * The caption `<Text>`'s OWN `maxWidth` - the panel's `maxWidth` minus its own
+ * horizontal padding on both sides, i.e. the content box a long cue actually
+ * has to wrap inside.
+ *
+ * This has to live on the `<Text>` node itself, not just on `HudPanel`'s
+ * outer `Container` (which already gets `CAPTION_DESIGN.maxWidth` - see the
+ * caption's `<HudPanel>` call below). A long cue used to render on one
+ * overflowing line instead of wrapping („die nicht umbrechen" - user report
+ * from a Quest session). Root-caused by reading `@pmndrs/uikit` 1.0.75's own
+ * layout source (`dist/text/layout/measure.js`,
+ * `dist/properties/defaults.js`) rather than live, since uikit's actual
+ * line-breaking cannot run in jsdom (see this file's tests):
+ *
+ * - a uikit `<Text>` DOES wrap by default (`wordBreak: 'break-word'` is the
+ *   package's own default, confirmed in `properties/defaults.js`) - but only
+ *   when Yoga hands its measure function a WIDTH, not `undefined`
+ *   (`measure.js`'s `measure: (width, widthMode) => measureGlyphLayout(...,
+ *   widthMode === MeasureMode.Undefined ? undefined : width)`). An
+ *   `undefined` availableWidth measures one unbroken line at its natural
+ *   width, same as `white-space: nowrap` in CSS.
+ * - `HudPanel`'s outer `Container` has `maxWidth` but no `width` (so it
+ *   shrink-wraps its content, which is what keeps a SHORT cue's panel
+ *   hugging the text - see below) AND `alignItems="center"`, not the uikit
+ *   flex column default of `stretch` (confirmed against this project's own
+ *   `DockTransport.tsx` header comment, "a flex column's default `alignItems`
+ *   is `stretch`"). Only `stretch` hands an auto-sized child its parent's own
+ *   resolved width; `center` lets the child size itself. Compare
+ *   `TranscriptWindow.tsx`'s row `<Text>`, which wraps with NO `maxWidth` of
+ *   its own at all - because THAT text sits under a `<Window size={...}>`,
+ *   whose default-`stretch` `Container`s hand every descendant a definite
+ *   width all the way down. This HUD has neither a sized ancestor window nor
+ *   `stretch`, so nothing ever hands the caption `<Text>` a width to wrap
+ *   against - it measures itself unbounded, then only the PANEL gets clamped
+ *   to `maxWidth`, clipping/overflowing the one long line instead of
+ *   rewrapping it.
+ * - putting `maxWidth` directly on the `<Text>` node sidesteps needing a
+ *   `stretch`ed, definite-width ancestor: Yoga bounds a measure-function
+ *   leaf's OWN available width by its OWN `maxWidth` when computing that
+ *   leaf's size, independent of what (if anything) its parent handed down -
+ *   so the same node whose measure function decides line breaks is the one
+ *   that gets told how wide it is allowed to be. The panel still has no
+ *   explicit `width`, so a short cue - narrower than this - still leaves the
+ *   panel hugging the text exactly as before.
+ *
+ * See `docs/UIKIT-NOTES.md` entry 7 for the general form of this gotcha.
+ */
+export const CAPTION_TEXT_MAX_WIDTH = CAPTION_DESIGN.maxWidth - CAPTION_DESIGN.paddingX * 2
 
 /**
  * The seek-feedback panel's own, FIXED scale: the caption's size control must
@@ -277,9 +326,15 @@ export function SubtitleHud({ store }: { store: PlayerStoreApi }) {
             maxWidth={CAPTION_DESIGN.maxWidth * subtitleScale}
           >
             {/* Real VTT cues carry their own embedded `\n` - see
-                `transcriptState.ts`'s `normalizeCueText` doc comment. */}
+                `transcriptState.ts`'s `normalizeCueText` doc comment.
+
+                `maxWidth` here (not just on the `<HudPanel>` above) is what
+                actually makes a long cue WRAP instead of overflowing one
+                line - see `CAPTION_TEXT_MAX_WIDTH`'s doc comment for why the
+                panel's own `maxWidth` alone does not do it. */}
             <Text
               fontSize={CAPTION_DESIGN.fontSize * subtitleScale}
+              maxWidth={CAPTION_TEXT_MAX_WIDTH * subtitleScale}
               color="#ffffff"
               textAlign="center"
             >

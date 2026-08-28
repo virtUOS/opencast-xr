@@ -316,6 +316,45 @@ Worth knowing: `e.stopPropagation()` is **not** an alternative. It stops
 *ancestors* from receiving the event, never the target itself, so it does
 nothing about which object the click is attributed to.
 
+## 7. A `<Text>` only wraps when SOMETHING hands its measure function a width - an ancestor `maxWidth` is not automatically that something
+
+**Symptom:** a `<Text>` inside a `Container` that has `maxWidth` (no explicit
+`width`) renders as ONE overflowing/clipped line instead of wrapping, even
+though `wordBreak` is left at its default (`'break-word'`, which does wrap).
+
+**Found in:** the opencast player's `SubtitleHud.tsx` caption panel - a Quest
+session report, „wenn die in dem Fenster länger als eine Zeile sind, die
+nicht umbrechen".
+
+**Root cause:** a uikit `<Text>`'s line-breaking comes from its own Yoga
+measure function (`@pmndrs/uikit`'s `text/layout/measure.js`), which is only
+called with a bounded `availableWidth` when Yoga's layout pass hands this
+node a definite or `AtMost` width. It gets `undefined` - unbounded, so the
+text measures one unbroken natural-width line - whenever nothing in the
+ancestor chain hands it a width, which is exactly what happens when: the
+`<Text>`'s parent `Container` has `maxWidth` but no `width` (so it
+shrink-wraps to content, deliberately - a maxWidth-only Container does NOT
+retroactively re-measure a wider-than-max child, it just clamps the
+CONTAINER's own box afterward), AND that parent's `alignItems` is anything
+other than the uikit flex column default of `stretch` (confirmed against this
+project's own `DockTransport.tsx`: "a flex column's default `alignItems` is
+`stretch`") - `center`/`flex-start`/`flex-end` let a child size itself
+instead of handing it the parent's resolved width. Compare
+`TranscriptWindow.tsx`'s row `<Text>`, which wraps with no `maxWidth` of its
+own at all, because it sits under a `<Window size={...}>` whose
+default-`stretch` `Container`s hand every descendant a definite width all the
+way down to the leaf.
+
+**Fix:** put `maxWidth` directly on the `<Text>` node itself, not (only) on an
+ancestor `Container`. Yoga bounds a measure-function leaf's own available
+width by ITS OWN `maxWidth` when sizing that leaf, independent of what (if
+anything) its parent handed down - so the wrap now happens regardless of
+`alignItems` or whether any ancestor establishes a definite width. See
+`SubtitleHud.tsx`'s `CAPTION_TEXT_MAX_WIDTH` for a worked example (the
+panel's content width, i.e. its own `maxWidth` minus its horizontal padding).
+A shrink-wrapping ancestor `Container` (`maxWidth`, no `width`) still hugs
+short text exactly as before - only the `<Text>`'s own bound changes.
+
 ---
 
 Linked from `src/App.tsx`'s header comment. Add an
