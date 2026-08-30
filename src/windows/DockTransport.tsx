@@ -404,6 +404,88 @@ function IconButton({
 }
 
 /**
+ * One breadcrumb crumb - a real component, not inline JSX inside the
+ * `trail.map()` below, for the same reason `MediaList.tsx`'s `MediaListRow`
+ * is one: `useCapturedPress` is a hook, and hooks cannot be called from
+ * inside a loop callback. One row per trail entry, keyed by `crumb.kind` at
+ * the call site (stable - see `breadcrumbTrail`'s own doc comment: one home,
+ * at most one series, one current), gives each crumb its own hook state
+ * exactly like any other list of components.
+ *
+ * `disabled={!interactive}` - not just leaving `onCrumb` to no-op for a
+ * non-interactive crumb (the current-recording crumb of a series-less
+ * episode) - keeps `useCapturedPress`'s own "disabled buttons never capture"
+ * contract true here too: an inert crumb's `pointerdown` doesn't grab the
+ * pointer at all, matching every other disabled control in this file.
+ */
+function CrumbRow({
+  crumb,
+  showChevron,
+  interactive,
+  opensSeries,
+  onPress,
+}: {
+  crumb: Crumb
+  /** Every crumb after the first gets a `ChevronRight` separator before it. */
+  showChevron: boolean
+  interactive: boolean
+  /** Whether THIS crumb (always the current-recording one when true) shows the "opens a list" icon. */
+  opensSeries: boolean
+  onPress: () => void
+}) {
+  const press = useCapturedPress(onPress, !interactive)
+  return (
+    <Container flexDirection="row" alignItems="center" gap={4}>
+      {showChevron && <ChevronRight width={11} height={11} color="#5a5a65" />}
+      <Container
+        height={CRUMB_ROW_HEIGHT_PX}
+        paddingX={6}
+        gap={4}
+        flexDirection="row"
+        alignItems="center"
+        borderRadius={4}
+        backgroundColor="#22222c"
+        // A non-interactive crumb keeps its resting colour on hover.
+        // Always a present object - never `undefined` - per
+        // docs/UIKIT-NOTES.md entry 1.
+        hover={{ backgroundColor: interactive ? '#2f3a4f' : '#22222c' }}
+        onPointerDown={press.onPointerDown}
+        onPointerUp={press.onPointerUp}
+        onPointerCancel={press.onPointerCancel}
+      >
+        {/* All three children hit-transparent: a crumb is one
+            button, and its label covers nearly all of it. See
+            `IconButton`'s doc comment. */}
+        {crumb.kind === 'home' && (
+          <House
+            width={11} height={11} color={CRUMB_COLOR}
+            pointerEvents={DECORATIVE_POINTER_EVENTS}
+          />
+        )}
+        <Text
+          fontSize={11}
+          color={crumb.kind === 'current' ? CRUMB_CURRENT_COLOR : CRUMB_COLOR}
+          pointerEvents={DECORATIVE_POINTER_EVENTS}
+        >
+          {crumb.label}
+        </Text>
+        {/* „Bitte ein passendes Symbol da noch einblenden, dass man
+            merkt, dass eine Aktion da verbunden ist." A list icon,
+            because what it opens IS the list of the other episodes -
+            and it is drawn in the brighter crumb colour, so the
+            affordance reads even where the greyed label does not. */}
+        {opensSeries && (
+          <List
+            width={11} height={11} color={CRUMB_COLOR}
+            pointerEvents={DECORATIVE_POINTER_EVENTS}
+          />
+        )}
+      </Container>
+    </Container>
+  )
+}
+
+/**
  * The dock's player-mode transport: one big Play/Pause button spanning two
  * rows, and beside it
  *
@@ -715,6 +797,14 @@ export function DockTransport({
     const state = store.getState()
     state.setPlaying(!state.playing)
   }, [store])
+
+  // Pointer-captured press, not `onClick` - see `pressCapture.ts`'s doc
+  // comment. This is the button the whole jitter fix was motivated by (the
+  // biggest target in the app, and the one a viewer reaches for without
+  // looking) - it has no `disabled` state to preserve (it toggles intent
+  // regardless of `stalled`; the spinner above is purely `PlayPauseIcon`'s
+  // own visual, untouched by this).
+  const playPress = useCapturedPress(togglePlay)
 
   const visual = derivePlaybackVisualState(playing, stalled)
   // Known cosmetic gap (code review, fix round 1): `LoaderCircle` is a
@@ -1112,10 +1202,9 @@ export function DockTransport({
           borderWidth={isHighlighted(TOUR_CONTROL_IDS.playPause) ? 3 : 0}
           borderColor={isHighlighted(TOUR_CONTROL_IDS.playPause) ? TOUR_HIGHLIGHT_BORDER : '#2f6f4f'}
           hover={{ backgroundColor: '#3f9f6f' }}
-          onClick={(e) => {
-            e.stopPropagation()
-            togglePlay()
-          }}
+          onPointerDown={playPress.onPointerDown}
+          onPointerUp={playPress.onPointerUp}
+          onPointerCancel={playPress.onPointerCancel}
         >
           {/* Hit-transparent like every other icon in the strip (see
               `IconButton`'s doc comment). This button is the biggest target in
@@ -1247,54 +1336,14 @@ export function DockTransport({
             return (
               // `kind` is unique within a trail (one home, at most one series,
               // one current - see breadcrumbTrail), so it is a stable key.
-              <Container key={crumb.kind} flexDirection="row" alignItems="center" gap={4}>
-                {index > 0 && <ChevronRight width={11} height={11} color="#5a5a65" />}
-                <Container
-                  height={CRUMB_ROW_HEIGHT_PX}
-                  paddingX={6}
-                  gap={4}
-                  flexDirection="row"
-                  alignItems="center"
-                  borderRadius={4}
-                  backgroundColor="#22222c"
-                  // A non-interactive crumb keeps its resting colour on hover.
-                  // Always a present object - never `undefined` - per
-                  // docs/UIKIT-NOTES.md entry 1.
-                  hover={{ backgroundColor: interactive ? '#2f3a4f' : '#22222c' }}
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    onCrumb(crumb)
-                  }}
-                >
-                  {/* All three children hit-transparent: a crumb is one
-                      button, and its label covers nearly all of it. See
-                      `IconButton`'s doc comment. */}
-                  {crumb.kind === 'home' && (
-                    <House
-                      width={11} height={11} color={CRUMB_COLOR}
-                      pointerEvents={DECORATIVE_POINTER_EVENTS}
-                    />
-                  )}
-                  <Text
-                    fontSize={11}
-                    color={crumb.kind === 'current' ? CRUMB_CURRENT_COLOR : CRUMB_COLOR}
-                    pointerEvents={DECORATIVE_POINTER_EVENTS}
-                  >
-                    {crumb.label}
-                  </Text>
-                  {/* „Bitte ein passendes Symbol da noch einblenden, dass man
-                      merkt, dass eine Aktion da verbunden ist." A list icon,
-                      because what it opens IS the list of the other episodes -
-                      and it is drawn in the brighter crumb colour, so the
-                      affordance reads even where the greyed label does not. */}
-                  {opensSeries && (
-                    <List
-                      width={11} height={11} color={CRUMB_COLOR}
-                      pointerEvents={DECORATIVE_POINTER_EVENTS}
-                    />
-                  )}
-                </Container>
-              </Container>
+              <CrumbRow
+                key={crumb.kind}
+                crumb={crumb}
+                showChevron={index > 0}
+                interactive={interactive}
+                opensSeries={opensSeries}
+                onPress={() => onCrumb(crumb)}
+              />
             )
           })}
           </Container>
