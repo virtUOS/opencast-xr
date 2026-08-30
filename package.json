@@ -22,7 +22,7 @@
     "@react-three/xr": "^6.4.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "sphere-shell": "^0.3.4",
+    "sphere-shell": "^0.3.5",
     "three": "^0.175.0",
     "zustand": "^5.0.0"
   },
