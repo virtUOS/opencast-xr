@@ -44,6 +44,68 @@ export const TOUR_CONTROL_IDS = {
 
 export type TourControlId = (typeof TOUR_CONTROL_IDS)[keyof typeof TOUR_CONTROL_IDS]
 
+/**
+ * The four physical face buttons a Quest Touch controller pair actually has -
+ * see `badgeHand` below for which controller each one sits on. Rendered by
+ * `TourBubble.tsx` as a round badge, at the user's request: „Kann man bei dem
+ * Stick und den Tasten eine etwas physischere Darstellung nutzen? Also A, B,
+ * X, Y in einen Kreis setzen, dass es den Buttons ähnlicher sieht ... Vielen
+ * ist leider die Quest noch sehr fremd."
+ */
+export type TourBadgeId = 'A' | 'B' | 'X' | 'Y'
+
+/**
+ * Which physical Quest controller a badge sits on - `A`/`B` are the RIGHT
+ * controller's face buttons, `X`/`Y` the LEFT's. Pulled out as its own pure,
+ * tested function (rather than inlined at each badge's render site) because
+ * it's a fact about the real hardware, not a rendering choice - and because
+ * `TourBubble.tsx` uses it to pick each badge's colour (the user's „Color-hint
+ * per Quest reality" ask), which has to agree with the fact everywhere it's
+ * drawn.
+ */
+export function badgeHand(id: TourBadgeId): 'links' | 'rechts' {
+  return id === 'A' || id === 'B' ? 'rechts' : 'links'
+}
+
+/**
+ * Which uikit-lucide glyph a controller-binding line leads with, as a
+ * symbolic key rather than a component reference - this module stays
+ * render-agnostic (no `@react-three/uikit`/`-lucide` import here at all;
+ * `TourBubble.tsx` is the one place that maps a key to an actual icon), the
+ * same "pure content, thin render" split `timelineDrag.ts`/`DockTransport.tsx`
+ * already use. `'trigger'` is the controller trigger (point-and-click);
+ * `'stick'` is either analog stick - the user's feedback didn't ask the two
+ * to look different from one another, only for a stick to be recognisable as
+ * one at all („Und vielleicht ein Icon für den Stick").
+ */
+export type TourIconId = 'trigger' | 'stick'
+
+/**
+ * One line of a controller-binding step's body: either plain prose (a
+ * `string`, rendered exactly like any other step's line), or a structured
+ * row that leads with a physical badge and/or a controller-glyph icon before
+ * its own text - the „physischere Darstellung" the user asked for. Only the
+ * `controller` step's `lines` actually contains the latter today; every other
+ * step's lines are all plain strings, which this union still accepts (a
+ * `string` is a valid `TourStepLine`) - so no other step's data had to
+ * change shape at all.
+ */
+export interface TourBindingRow {
+  /** Physical button badges leading the row, in order - e.g. `['A', 'X']` for a line that names both. Omitted (or empty) for an icon-only row. */
+  badges?: readonly TourBadgeId[]
+  /** The controller glyph leading the row - omitted for a badge-only row (the badge letter already says which button, with no icon needed alongside it). */
+  icon?: TourIconId
+  /** The row's own sentence - same plain-ASCII-plus-umlauts rule as every other line (see `TourStep.lines`'s doc comment). */
+  text: string
+}
+
+export type TourStepLine = string | TourBindingRow
+
+/** A line's own text, regardless of which of `TourStepLine`'s two shapes it is - used by the tests below, and available to any renderer that only needs the words. */
+export function tourLineText(line: TourStepLine): string {
+  return typeof line === 'string' ? line : line.text
+}
+
 export interface TourStep {
   /** Stable, for tests and React `key`s - not shown to the viewer. */
   id: string
@@ -53,10 +115,11 @@ export interface TourStep {
    * entry 3: this text is rendered by the same installed uikit font that is
    * missing several typographic-punctuation glyphs (‹, the middle dot, an
    * ellipsis, a bullet, an arrow, en dash), so it avoids all of them, exactly
-   * like every other in-scene string in this app.
+   * like every other in-scene string in this app. See `TourStepLine` for the
+   * two shapes an entry can take.
    */
-  lines: readonly string[]
-  /** Rendered as a "- " prefixed list rather than plain paragraphs - only step 1 needs it (the controller/window bindings read as a reference list, not prose). */
+  lines: readonly TourStepLine[]
+  /** Rendered as a "- " prefixed list rather than plain paragraphs - only step 1 needs it (the controller/window bindings read as a reference list, not prose). A structured `TourBindingRow` line renders its own badge/icon as the "look here" marker instead of a leading dash - see `TourBubble.tsx`. */
   bullet?: boolean
   /** Which dock controls to highlight while this step is showing - see the doc comment above for why some steps have none. */
   highlightIds: readonly TourControlId[]
@@ -72,12 +135,16 @@ export const TOUR_STEPS: readonly TourStep[] = [
     id: 'controller',
     bullet: true,
     lines: [
-      'Trigger: zeigen und klicken.',
-      'Linker Stick links/rechts: spulen - je staerker ausgelenkt, desto schneller.',
-      'Linker Stick hoch/runter: einen Kapitel-Sprung auslösen.',
-      'A oder X: Wiedergabe/Pause.',
-      'B gedrückt halten: Ansicht neu zentrieren - der Ring füllt sich.',
-      'Rechter Stick: Ansicht drehen.',
+      { icon: 'trigger', text: 'Trigger: zeigen und klicken.' },
+      { icon: 'stick', text: 'Linker Stick links/rechts: spulen - je staerker ausgelenkt, desto schneller.' },
+      { icon: 'stick', text: 'Linker Stick hoch/runter: einen Kapitel-Sprung auslösen.' },
+      // The clarifying line the user asked for („Vielen ist leider die Quest
+      // noch sehr fremd") sits right before the badges start appearing, so
+      // the mapping is known before it's used rather than after.
+      'A und B liegen am rechten Controller, X und Y am linken.',
+      { badges: ['A', 'X'], text: 'A oder X: Wiedergabe/Pause.' },
+      { badges: ['B'], text: 'B gedrückt halten: Ansicht neu zentrieren - der Ring füllt sich.' },
+      { icon: 'stick', text: 'Rechter Stick: Ansicht drehen.' },
       'Fenster: am Titelbalken greifen und verschieben - sie rasten aneinander ein. An der Ecke ziehen, um die Größe zu ändern.',
     ],
     highlightIds: [],

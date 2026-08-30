@@ -1,7 +1,8 @@
-import type { ReactNode } from 'react'
-import { Container, Text } from '@react-three/uikit'
+import type { ComponentType, ReactNode } from 'react'
+import { Container, Text, type SvgProperties } from '@react-three/uikit'
+import { Joystick, MousePointerClick } from '@react-three/uikit-lucide'
 import { DECORATIVE_POINTER_EVENTS } from 'sphere-shell'
-import type { TourStep } from './tourSteps'
+import { badgeHand, type TourBadgeId, type TourIconId, type TourStep, type TourStepLine } from './tourSteps'
 import { useCapturedPress } from './useCapturedPress'
 
 /**
@@ -87,11 +88,103 @@ function TourButton({
   )
 }
 
-function TourLine({ text, bullet }: { text: string; bullet: boolean }): ReactNode {
+/** A physical badge's own leading glyph size and the row's shared spacing - see `TourBadge`'s doc comment. */
+const BADGE_SIZE_PX = 28
+const BADGE_ICON_PX = 18
+const BADGE_ROW_GAP_PX = 8
+
+/**
+ * Colour-hint per Quest reality („Color-hint per Quest reality: A/B on the
+ * right controller, X/Y on the left"): the right controller's badges (A/B)
+ * get one tint, the left's (X/Y - `badgeHand`, `tourSteps.ts`) another, so a
+ * badge's own colour agrees with which hand actually holds that button - on
+ * top of the clarifying text line `tourSteps.ts`'s `TOUR_STEPS` already
+ * carries. Deliberately far from `TOUR_HIGHLIGHT_BG`/`_BORDER` (the dock's
+ * "look here" amber) so a badge can never read as that unrelated highlight.
+ */
+const BADGE_COLOR = {
+  rechts: { background: '#2f6f9f', border: '#7fb3e0' },
+  links: { background: '#9f6f3f', border: '#e0b37f' },
+} as const
+
+/**
+ * A physical button badge: a circular `Container` (`borderRadius` half its
+ * own height, per the user's „A, B, X, Y in einen Kreis setzen") holding the
+ * letter, tinted per `badgeHand`. The border is a lighter tone of the same
+ * hue rather than the flat single-tone fill every other control in this app
+ * uses - a small rim-highlight is the closest a uikit `Container` (one flat
+ * `borderColor`, no per-side colours - see `docs/UIKIT-NOTES.md` for the
+ * project's running list of what this uikit version can/can't do) gets to
+ * the "etwas physischere Darstellung" (a real button's bevelled cap) the
+ * user asked for.
+ */
+function TourBadge({ id }: { id: TourBadgeId }) {
+  const { background, border } = BADGE_COLOR[badgeHand(id)]
   return (
-    <Text fontSize={14} lineHeight={1.4} color="#e8e8ee" maxWidth={TOUR_TEXT_MAX_WIDTH_PX}>
-      {bullet ? `- ${text}` : text}
-    </Text>
+    <Container
+      width={BADGE_SIZE_PX}
+      height={BADGE_SIZE_PX}
+      borderRadius={BADGE_SIZE_PX / 2}
+      alignItems="center"
+      justifyContent="center"
+      backgroundColor={background}
+      borderWidth={2}
+      borderColor={border}
+    >
+      <Text fontSize={13} fontWeight="bold" color="#ffffff" pointerEvents={DECORATIVE_POINTER_EVENTS}>
+        {id}
+      </Text>
+    </Container>
+  )
+}
+
+/**
+ * Symbolic icon id -> actual uikit-lucide glyph. `tourSteps.ts` only ever
+ * hands this component a `TourIconId` string (`'trigger' | 'stick'`), never
+ * a component reference - see that module's own doc comment on why (staying
+ * render-agnostic). `Joystick` reads as an analog stick at a glance
+ * (`@react-three/uikit-lucide`'s own icon set - checked against what it
+ * actually exports, not guessed); `MousePointerClick` reads as "point and
+ * press", which is exactly what the trigger does.
+ */
+const TOUR_ICON: Record<TourIconId, ComponentType<SvgProperties>> = {
+  trigger: MousePointerClick,
+  stick: Joystick,
+}
+
+/**
+ * One line of a step's body. A plain `string` renders exactly as before (an
+ * optional leading "- " for a bulleted step). A structured `TourBindingRow`
+ * (only the `controller` step's lines are ever one of these - see
+ * `tourSteps.ts`) instead leads with its badges and/or icon, and skips the
+ * leading dash: the badge/icon itself is the "look here" marker, and adding
+ * both would be redundant clutter in an already-compact row. The row's own
+ * `<Text>` gets a narrower `maxWidth` than a plain line - it has to leave
+ * room for whatever badges/icon precede it in the same flex row, or it could
+ * wrap wider than the panel actually has left (`docs/UIKIT-NOTES.md` entry
+ * 7: a `<Text>`'s wrap bound is its OWN `maxWidth`, not whatever space its
+ * siblings happen to leave it).
+ */
+function TourLine({ line, bullet }: { line: TourStepLine; bullet: boolean }): ReactNode {
+  if (typeof line === 'string') {
+    return (
+      <Text fontSize={14} lineHeight={1.4} color="#e8e8ee" maxWidth={TOUR_TEXT_MAX_WIDTH_PX}>
+        {bullet ? `- ${line}` : line}
+      </Text>
+    )
+  }
+  const Icon = line.icon ? TOUR_ICON[line.icon] : null
+  const badgeCount = line.badges?.length ?? 0
+  const prefixWidth =
+    badgeCount * (BADGE_SIZE_PX + BADGE_ROW_GAP_PX) + (Icon ? BADGE_ICON_PX + BADGE_ROW_GAP_PX : 0)
+  return (
+    <Container flexDirection="row" alignItems="center" gap={BADGE_ROW_GAP_PX}>
+      {line.badges?.map((id) => <TourBadge key={id} id={id} />)}
+      {Icon && <Icon width={BADGE_ICON_PX} height={BADGE_ICON_PX} color="#e8e8ee" />}
+      <Text fontSize={14} lineHeight={1.4} color="#e8e8ee" maxWidth={TOUR_TEXT_MAX_WIDTH_PX - prefixWidth}>
+        {line.text}
+      </Text>
+    </Container>
   )
 }
 
@@ -128,7 +221,7 @@ export function TourBubble({
         </Text>
         <Container flexDirection="column" gap={6}>
           {step.lines.map((line, i) => (
-            <TourLine key={i} text={line} bullet={step.bullet === true} />
+            <TourLine key={i} line={line} bullet={step.bullet === true} />
           ))}
         </Container>
         <Container flexDirection="row" justifyContent="flex-end" gap={8} marginTop={4}>
