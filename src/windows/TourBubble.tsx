@@ -2,6 +2,7 @@ import type { ReactNode } from 'react'
 import { Container, Text } from '@react-three/uikit'
 import { DECORATIVE_POINTER_EVENTS } from 'sphere-shell'
 import type { TourStep } from './tourSteps'
+import { useCapturedPress } from './useCapturedPress'
 
 /**
  * The tutorial tour's speech-bubble panel - one explanation, plus "Weiter"/
@@ -56,6 +57,10 @@ function TourButton({
 }) {
   const resting = variant === 'primary' ? TOUR_ACCENT_BG : TOUR_GHOST_BG
   const hovered = variant === 'primary' ? TOUR_ACCENT_BG_HOVER : TOUR_GHOST_BG_HOVER
+  // Pointer-captured press, not `onClick` - see `pressCapture.ts`'s doc
+  // comment for why a drifting Quest ray needs this (the same jitter fix
+  // applied to `DockTransport.tsx`'s `IconButton`).
+  const press = useCapturedPress(onPress)
   return (
     <Container
       height={TOUR_BUTTON_HEIGHT_PX}
@@ -67,10 +72,9 @@ function TourButton({
       // Always a plain object, never conditionally `undefined` - see
       // `docs/UIKIT-NOTES.md` entry 1.
       hover={{ backgroundColor: hovered }}
-      onClick={(e) => {
-        e.stopPropagation()
-        onPress()
-      }}
+      onPointerDown={press.onPointerDown}
+      onPointerUp={press.onPointerUp}
+      onPointerCancel={press.onPointerCancel}
     >
       {/* Hit-transparent, like every other button label in this app - see
           `DockTransport.tsx`'s `IconButton` doc comment (entry 6b in the

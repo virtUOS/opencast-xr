@@ -13,6 +13,7 @@ import {
   seriesTiles,
   toEpisodeTile,
 } from './libraryState'
+import { useCapturedPress } from './useCapturedPress'
 
 const RETRY_LABEL = 'Erneut versuchen'
 const BACK_LABEL = 'Zurück'
@@ -40,12 +41,18 @@ const BACK_LABEL = 'Zurück'
  * comment: a press on the glyph and a release on the label are two different
  * `Object3D`s, and `@pmndrs/pointer-events` only emits `click` when press and
  * release resolve to the SAME one.
+ *
+ * Presses are pointer-captured (`useCapturedPress`), not `onClick` - a
+ * drifting Quest ray must not lose the press once it lands here either; see
+ * `pressCapture.ts`'s own doc comment for the full reasoning (the same fix
+ * applied to `DockTransport.tsx`'s `IconButton`).
  */
 const BACK_BUTTON_HEIGHT_PX = 44
 const BACK_BG = '#22222c'
 const BACK_BG_HOVER = '#3f6f9f'
 
 function BackButton({ onPress }: { onPress: () => void }) {
+  const press = useCapturedPress(onPress)
   return (
     <Container
       height={BACK_BUTTON_HEIGHT_PX}
@@ -56,10 +63,9 @@ function BackButton({ onPress }: { onPress: () => void }) {
       borderRadius={8}
       backgroundColor={BACK_BG}
       hover={{ backgroundColor: BACK_BG_HOVER }}
-      onClick={(e) => {
-        e.stopPropagation()
-        onPress()
-      }}
+      onPointerDown={press.onPointerDown}
+      onPointerUp={press.onPointerUp}
+      onPointerCancel={press.onPointerCancel}
     >
       <ChevronLeft width={16} height={16} color="#cfd8ff" pointerEvents={DECORATIVE_POINTER_EVENTS} />
       <Text fontSize={14} color="#cfd8ff" pointerEvents={DECORATIVE_POINTER_EVENTS}>
@@ -75,6 +81,7 @@ function BackButton({ onPress }: { onPress: () => void }) {
 // it from a ~26 px to a ~40 px tall target; the hover colors themselves
 // already had real contrast (`#3a2028` -> `#542c38`) so those are unchanged.
 function ErrorPanel({ message, onRetry }: { message: string; onRetry: () => void }) {
+  const press = useCapturedPress(onRetry)
   return (
     <Container flexDirection="column" gap={10} padding={12} alignItems="flex-start">
       <Text fontSize={13} color="#ffd8de">{message}</Text>
@@ -84,10 +91,9 @@ function ErrorPanel({ message, onRetry }: { message: string; onRetry: () => void
         borderRadius={6}
         backgroundColor="#3a2028"
         hover={{ backgroundColor: '#542c38' }}
-        onClick={(e) => {
-          e.stopPropagation()
-          onRetry()
-        }}
+        onPointerDown={press.onPointerDown}
+        onPointerUp={press.onPointerUp}
+        onPointerCancel={press.onPointerCancel}
       >
         {/* The label covers nearly the whole button, and a press and release
             that resolve to two different objects is not a click - see
@@ -176,6 +182,14 @@ export function LibraryWindow({ store }: { store: PlayerStoreApi }) {
     [store],
   )
 
+  // Called unconditionally (hooks can't live inside `{openError && ...}`
+  // JSX) - the guard on `openError` moves inside the callback instead. Same
+  // pointer-captured press as `BackButton`/`ErrorPanel` above; see
+  // `pressCapture.ts`'s doc comment.
+  const retryOpenError = useCapturedPress(() => {
+    if (openError) selectEpisode(openError.id)
+  })
+
   // User feedback: „Serien haben glaube ich nie ein Vorschaubild." True by
   // construction, not a fetch bug - the Search API's `/series` endpoint
   // returns Dublin Core (`id`/`title` only, see `parseSeries` in
@@ -263,10 +277,9 @@ export function LibraryWindow({ store }: { store: PlayerStoreApi }) {
                   borderRadius={4}
                   backgroundColor="#542c38"
                   hover={{ backgroundColor: '#6a3a48' }}
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    selectEpisode(openError.id)
-                  }}
+                  onPointerDown={retryOpenError.onPointerDown}
+                  onPointerUp={retryOpenError.onPointerUp}
+                  onPointerCancel={retryOpenError.onPointerCancel}
                 >
                   <Text fontSize={12} color="#ffd8de" pointerEvents={DECORATIVE_POINTER_EVENTS}>
                     {RETRY_LABEL}

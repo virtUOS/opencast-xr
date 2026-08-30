@@ -73,6 +73,7 @@ import {
 import { segmentTickFractions } from './chaptersState'
 import { TOUR_CONTROL_IDS, type TourControlId, type TourStep } from './tourSteps'
 import { TourBubble } from './TourBubble'
+import { useCapturedPress } from './useCapturedPress'
 
 const BUTTON_ICON_PX = 15
 const SMALL_ICON_PX = 13
@@ -298,6 +299,18 @@ const LABEL = {
  * `docs/UIKIT-NOTES.md` entry 1, which is about `hover` specifically but the
  * same "never toggle a prop to/from `undefined`" caution is applied here on
  * principle).
+ *
+ * ## Pointer-captured press, not `onClick` - the jitter fix
+ *
+ * „Mit den Zeigern der Quest zittere ich immer ein wenig, dann kann aus einem
+ * Button Drücken ein verschieben werden": a press that drifts off this 24px
+ * square before release used to be lost outright (`onClick` needs the same
+ * `Object3D` at both ends - `docs/UIKIT-NOTES.md` entry 6b). `useCapturedPress`
+ * (`pressCapture.ts`'s reducer, wired thin) captures the pointer on
+ * `pointerdown` so the release always resolves back to THIS button
+ * regardless of where the ray has wandered to by then - see that module's own
+ * doc comment for why release-anywhere-while-captured is the right behaviour
+ * here (matching a physical button) rather than a distance-based cancel.
  */
 function IconButton({
   size = ROW_HEIGHT_PX,
@@ -325,6 +338,7 @@ function IconButton({
 }) {
   const restingBackground = highlighted ? TOUR_HIGHLIGHT_BG : background
   const hoveredBackground = highlighted ? TOUR_HIGHLIGHT_BG : hoverBackground
+  const press = useCapturedPress(onPress, disabled)
   return (
     <HoverLabel label={label} controlHeight={size} align={labelAlign}>
       <Container
@@ -337,11 +351,9 @@ function IconButton({
         borderWidth={highlighted ? 2 : 0}
         borderColor={highlighted ? TOUR_HIGHLIGHT_BORDER : restingBackground}
         hover={{ backgroundColor: disabled ? restingBackground : hoveredBackground }}
-        onClick={(e) => {
-          e.stopPropagation()
-          if (disabled) return
-          onPress()
-        }}
+        onPointerDown={press.onPointerDown}
+        onPointerUp={press.onPointerUp}
+        onPointerCancel={press.onPointerCancel}
       >
         {/* See the doc comment: the icon must not be a hit target of its own.
             `alignItems`/`justifyContent` are inherited from nothing - this layer

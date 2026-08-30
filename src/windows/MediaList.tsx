@@ -1,6 +1,7 @@
-import type { ComponentType } from 'react'
+import type { ComponentType, ReactNode } from 'react'
 import { Container, Text, Image, type SvgProperties } from '@react-three/uikit'
 import { DECORATIVE_POINTER_EVENTS } from 'sphere-shell'
+import { useCapturedPress } from './useCapturedPress'
 
 export interface MediaListItem {
   id: string
@@ -149,152 +150,210 @@ const SUBTITLE_MAX_CHARS = 56
  * as of the split-click round, whether image and text are two independent
  * hit targets - see `onSelectImage`).
  */
+/** A tile's leading box - shared by both row shapes below, so the image/icon/blank rendering isn't duplicated between them. */
+function tileVisualBox(item: MediaListItem): ReactNode {
+  const visual = tileVisual(item)
+  if (visual === 'image') {
+    return (
+      <Image
+        src={item.imageUrl} width={TILE_IMAGE_W} height={TILE_IMAGE_H} borderRadius={4}
+        pointerEvents={DECORATIVE_POINTER_EVENTS}
+      />
+    )
+  }
+  if (visual === 'icon') {
+    return (
+      <Container
+        width={TILE_IMAGE_W} height={TILE_IMAGE_H} backgroundColor={PLACEHOLDER_BG} borderRadius={4}
+        alignItems="center" justifyContent="center"
+        pointerEvents={DECORATIVE_POINTER_EVENTS}
+      >
+        {item.placeholderIcon && (
+          <item.placeholderIcon
+            width={20} height={20} color={PLACEHOLDER_ICON_COLOR}
+            pointerEvents={DECORATIVE_POINTER_EVENTS}
+          />
+        )}
+      </Container>
+    )
+  }
+  return (
+    <Container
+      width={TILE_IMAGE_W} height={TILE_IMAGE_H} backgroundColor="#101014" borderRadius={4}
+      pointerEvents={DECORATIVE_POINTER_EVENTS}
+    />
+  )
+}
+
+/** A tile's title/subtitle column - shared by both row shapes below. */
+function tileTextBlock(item: MediaListItem): ReactNode {
+  return (
+    <>
+      <Text fontSize={14} color="#ffffff">{truncate(item.title, TITLE_MAX_CHARS)}</Text>
+      {item.subtitle != null && (
+        <Text fontSize={11} color="#9a9aa5">{truncate(item.subtitle, SUBTITLE_MAX_CHARS)}</Text>
+      )}
+    </>
+  )
+}
+
+/**
+ * The ordinary (non-split-click) row: one hit object for the whole tile - see
+ * `MediaList`'s own doc comment on `onSelectImage` for why split-click is the
+ * exception, not the rule.
+ *
+ * A real component, not inline JSX inside a `.map()` - `useCapturedPress`
+ * (the pointer-capture jitter fix; see `pressCapture.ts`'s doc comment) is a
+ * hook, and hooks cannot be called from inside a loop callback. One row per
+ * list item, keyed by `item.id` at the call site below, gives each tile its
+ * own hook state exactly like any other list of components.
+ */
+function MediaListRow({
+  item,
+  active,
+  onSelect,
+}: {
+  item: MediaListItem
+  active: boolean
+  onSelect: (id: string) => void
+}) {
+  const press = useCapturedPress(() => onSelect(item.id))
+  return (
+    <Container
+      flexDirection="row"
+      gap={10}
+      padding={8}
+      // Same UIKIT-NOTES entry-8 guard as the split-click row below:
+      // auto-height rows in a column default to flexShrink 1 and get
+      // squashed as the list grows - the library and series lists are
+      // exactly the ones that grow.
+      flexShrink={0}
+      alignItems="center"
+      backgroundColor={active ? ACTIVE_BG : RESTING_BG}
+      borderRadius={6}
+      hover={{ backgroundColor: active ? ACTIVE_BG : HOVER_BG }}
+      onPointerDown={press.onPointerDown}
+      onPointerUp={press.onPointerUp}
+      onPointerCancel={press.onPointerCancel}
+    >
+      {/* Every child of a tile opts OUT of hit-testing, so the tile is
+          ONE hit object. This matters more here than anywhere else in
+          the app: the thumbnail and the text column between them cover
+          essentially the whole tile, so nearly every press lands on a
+          child rather than on the tile - and @pmndrs/pointer-events only
+          emits a `click` when press and release resolve to the exact same
+          Object3D, with no movement tolerance at all. Press on the title,
+          release on the thumbnail, and the tile stays highlighted (hover
+          is emitted on ancestors too) while the click is silently
+          discarded. See sphere-shell's DECORATIVE_POINTER_EVENTS for the
+          quoted upstream code. `pointerEvents` is inherited in uikit, so
+          the value on the column covers both `Text`s under it. */}
+      {tileVisualBox(item)}
+      <Container
+        flexDirection="column" gap={2} flexGrow={1}
+        pointerEvents={DECORATIVE_POINTER_EVENTS}
+      >
+        {tileTextBlock(item)}
+      </Container>
+    </Container>
+  )
+}
+
+/**
+ * Split-click mode (`onSelectImage` provided - `ChaptersWindow` only, see
+ * that prop's own doc comment): the image and text regions are two GENUINE
+ * separate hit objects, each carrying its own background/hover pair, rather
+ * than two children opted OUT of hit-testing under one shared row. The outer
+ * row is a plain grouping `Container` with no background/hover/press of its
+ * own - giving it one would put a THIRD, larger hit object underneath the
+ * other two, which is exactly the "same underlying Object3D" bleed this mode
+ * exists to avoid. Two independent `useCapturedPress` calls, one per region -
+ * same "real component, not inline JSX" reasoning as `MediaListRow` above.
+ */
+function MediaListSplitRow({
+  item,
+  active,
+  onSelect,
+  onSelectImage,
+}: {
+  item: MediaListItem
+  active: boolean
+  onSelect: (id: string) => void
+  onSelectImage: (id: string) => void
+}) {
+  const imagePress = useCapturedPress(() => onSelectImage(item.id))
+  const textPress = useCapturedPress(() => onSelect(item.id))
+  return (
+    // `flexShrink={0}` - see `docs/UIKIT-NOTES.md` entry 8: a uikit
+    // scrolling column's children default to `flexShrink: 1`, so a
+    // LONG list (many tiles) proportionally squashes every row's
+    // auto-height to fit the column's own box instead of letting the
+    // column genuinely overflow and scroll - found and fixed in
+    // `TranscriptWindow.tsx`'s rows, applied here defensively since
+    // this component backs every long list in the app (the library,
+    // a series' episodes, chapters) and none of them are exercised
+    // with enough real items in this repo's own fixtures to have hit
+    // the threshold live.
+    <Container flexShrink={0} flexDirection="row" gap={10} alignItems="stretch">
+      <Container
+        padding={4}
+        borderRadius={6}
+        alignItems="center"
+        justifyContent="center"
+        backgroundColor={active ? ACTIVE_BG : RESTING_BG}
+        hover={{ backgroundColor: active ? ACTIVE_BG : HOVER_BG }}
+        onPointerDown={imagePress.onPointerDown}
+        onPointerUp={imagePress.onPointerUp}
+        onPointerCancel={imagePress.onPointerCancel}
+      >
+        {tileVisualBox(item)}
+      </Container>
+      <Container
+        flexDirection="column"
+        gap={2}
+        flexGrow={1}
+        padding={8}
+        borderRadius={6}
+        justifyContent="center"
+        backgroundColor={active ? ACTIVE_BG : RESTING_BG}
+        hover={{ backgroundColor: active ? ACTIVE_BG : HOVER_BG }}
+        onPointerDown={textPress.onPointerDown}
+        onPointerUp={textPress.onPointerUp}
+        onPointerCancel={textPress.onPointerCancel}
+      >
+        <Container flexDirection="column" gap={2} pointerEvents={DECORATIVE_POINTER_EVENTS}>
+          {tileTextBlock(item)}
+        </Container>
+      </Container>
+    </Container>
+  )
+}
+
 export function MediaList({ items, onSelect, onSelectImage, onMore, moreLabel, emptyText, activeId }: MediaListProps) {
   const splitClick = onSelectImage != null
+  // Called unconditionally (hooks can't live inside `{onMore != null && ...}`
+  // JSX) - the guard on `onMore` moves inside the callback instead. Same
+  // pointer-captured press as the rows above; see `pressCapture.ts`'s doc
+  // comment.
+  const morePress = useCapturedPress(() => onMore?.())
   return (
     <Container flexGrow={1} flexDirection="column" overflow="scroll" padding={12} gap={8}>
       {items.length === 0 ? (
         <Text fontSize={14} color="#9a9aa5">{emptyText}</Text>
       ) : (
-        items.map((item) => {
-          const active = item.id === activeId
-          const visual = tileVisual(item)
-
-          const visualBox =
-            visual === 'image' ? (
-              <Image
-                src={item.imageUrl} width={TILE_IMAGE_W} height={TILE_IMAGE_H} borderRadius={4}
-                pointerEvents={DECORATIVE_POINTER_EVENTS}
-              />
-            ) : visual === 'icon' ? (
-              <Container
-                width={TILE_IMAGE_W} height={TILE_IMAGE_H} backgroundColor={PLACEHOLDER_BG} borderRadius={4}
-                alignItems="center" justifyContent="center"
-                pointerEvents={DECORATIVE_POINTER_EVENTS}
-              >
-                {item.placeholderIcon && (
-                  <item.placeholderIcon
-                    width={20} height={20} color={PLACEHOLDER_ICON_COLOR}
-                    pointerEvents={DECORATIVE_POINTER_EVENTS}
-                  />
-                )}
-              </Container>
-            ) : (
-              <Container
-                width={TILE_IMAGE_W} height={TILE_IMAGE_H} backgroundColor="#101014" borderRadius={4}
-                pointerEvents={DECORATIVE_POINTER_EVENTS}
-              />
-            )
-
-          const textBlock = (
-            <>
-              <Text fontSize={14} color="#ffffff">{truncate(item.title, TITLE_MAX_CHARS)}</Text>
-              {item.subtitle != null && (
-                <Text fontSize={11} color="#9a9aa5">{truncate(item.subtitle, SUBTITLE_MAX_CHARS)}</Text>
-              )}
-            </>
-          )
-
-          if (!splitClick) {
-            return (
-              <Container
-                key={item.id}
-                flexDirection="row"
-                gap={10}
-                padding={8}
-                // Same UIKIT-NOTES entry-8 guard as the split-click branch
-                // below: auto-height rows in a column default to
-                // flexShrink 1 and get squashed as the list grows - the
-                // library and series lists are exactly the ones that grow.
-                flexShrink={0}
-                alignItems="center"
-                backgroundColor={active ? ACTIVE_BG : RESTING_BG}
-                borderRadius={6}
-                hover={{ backgroundColor: active ? ACTIVE_BG : HOVER_BG }}
-                onClick={(e) => {
-                  e.stopPropagation()
-                  onSelect(item.id)
-                }}
-              >
-                {/* Every child of a tile opts OUT of hit-testing, so the tile is
-                    ONE hit object. This matters more here than anywhere else in
-                    the app: the thumbnail and the text column between them cover
-                    essentially the whole tile, so nearly every press lands on a
-                    child rather than on the tile - and @pmndrs/pointer-events only
-                    emits a `click` when press and release resolve to the exact same
-                    Object3D, with no movement tolerance at all. Press on the title,
-                    release on the thumbnail, and the tile stays highlighted (hover
-                    is emitted on ancestors too) while the click is silently
-                    discarded. See sphere-shell's DECORATIVE_POINTER_EVENTS for the
-                    quoted upstream code. `pointerEvents` is inherited in uikit, so
-                    the value on the column covers both `Text`s under it. */}
-                {visualBox}
-                <Container
-                  flexDirection="column" gap={2} flexGrow={1}
-                  pointerEvents={DECORATIVE_POINTER_EVENTS}
-                >
-                  {textBlock}
-                </Container>
-              </Container>
-            )
-          }
-
-          // Split-click mode (`onSelectImage` provided - ChaptersWindow only,
-          // see the prop's own doc comment): the image and text regions are
-          // now two GENUINE separate hit objects, each carrying its own
-          // background/hover pair, rather than two children opted OUT of
-          // hit-testing under one shared row. The outer row is a plain
-          // grouping Container with no background/hover/onClick of its own -
-          // giving it one would put a THIRD, larger hit object underneath the
-          // other two, which is exactly the "same underlying Object3D"
-          // bleed this mode exists to avoid.
-          return (
-            // `flexShrink={0}` - see `docs/UIKIT-NOTES.md` entry 8: a uikit
-            // scrolling column's children default to `flexShrink: 1`, so a
-            // LONG list (many tiles) proportionally squashes every row's
-            // auto-height to fit the column's own box instead of letting the
-            // column genuinely overflow and scroll - found and fixed in
-            // `TranscriptWindow.tsx`'s rows, applied here defensively since
-            // this component backs every long list in the app (the library,
-            // a series' episodes, chapters) and none of them are exercised
-            // with enough real items in this repo's own fixtures to have hit
-            // the threshold live.
-            <Container key={item.id} flexShrink={0} flexDirection="row" gap={10} alignItems="stretch">
-              <Container
-                padding={4}
-                borderRadius={6}
-                alignItems="center"
-                justifyContent="center"
-                backgroundColor={active ? ACTIVE_BG : RESTING_BG}
-                hover={{ backgroundColor: active ? ACTIVE_BG : HOVER_BG }}
-                onClick={(e) => {
-                  e.stopPropagation()
-                  onSelectImage(item.id)
-                }}
-              >
-                {visualBox}
-              </Container>
-              <Container
-                flexDirection="column"
-                gap={2}
-                flexGrow={1}
-                padding={8}
-                borderRadius={6}
-                justifyContent="center"
-                backgroundColor={active ? ACTIVE_BG : RESTING_BG}
-                hover={{ backgroundColor: active ? ACTIVE_BG : HOVER_BG }}
-                onClick={(e) => {
-                  e.stopPropagation()
-                  onSelect(item.id)
-                }}
-              >
-                <Container flexDirection="column" gap={2} pointerEvents={DECORATIVE_POINTER_EVENTS}>
-                  {textBlock}
-                </Container>
-              </Container>
-            </Container>
-          )
-        })
+        items.map((item) =>
+          splitClick ? (
+            <MediaListSplitRow
+              key={item.id}
+              item={item}
+              active={item.id === activeId}
+              onSelect={onSelect}
+              onSelectImage={onSelectImage}
+            />
+          ) : (
+            <MediaListRow key={item.id} item={item} active={item.id === activeId} onSelect={onSelect} />
+          ),
+        )
       )}
       {onMore != null && (
         <Container
@@ -304,10 +363,9 @@ export function MediaList({ items, onSelect, onSelectImage, onMore, moreLabel, e
           justifyContent="center"
           backgroundColor="#2f4f6f"
           hover={{ backgroundColor: '#3f6f9f' }}
-          onClick={(e) => {
-            e.stopPropagation()
-            onMore()
-          }}
+          onPointerDown={morePress.onPointerDown}
+          onPointerUp={morePress.onPointerUp}
+          onPointerCancel={morePress.onPointerCancel}
         >
           <Text fontSize={13} color="#ffffff" pointerEvents={DECORATIVE_POINTER_EVENTS}>
             {moreLabel ?? 'Mehr laden'}
