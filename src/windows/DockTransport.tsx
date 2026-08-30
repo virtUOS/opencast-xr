@@ -213,12 +213,19 @@ const TOUR_GAP_PX = 14
  *
  * Not exported by sphere-shell - `Dock.tsx`'s own `BUTTON_PX`/`MENU_WIDTH_PX`
  * are module-private - so these two numbers are measured directly from the
- * installed `sphere-shell/dist/index.js` instead: the control strip's row is
- * `[this app's slot, a 2px divider, the menu/exit group]`, laid out with an
- * 8px gap between EACH of those three, and the shell's own three-dot MENU
- * button is a fixed 30px square that is ALWAYS present. `SHELL_EXTRA_XR_PX`
- * is the SECOND 30px square next to it - the red Exit VR button - which only
- * renders while `xrSession.active` (see that file's own `Dock` component).
+ * installed `sphere-shell/dist/index.js` instead: the control strip is ONE
+ * `flexDirection: "row", gap: 8` container whose children are `[this app's
+ * slot, a 2px divider, the three-dot menu group, xrSession.active && the Exit
+ * VR button]` - four siblings of that SAME row, not three with the exit
+ * button nested inside the menu group (an easy misread the first pass here
+ * made - the exit `<HoverLabel>` sits at the same JSX level as the menu
+ * group's own closing `] })`, one `children` entry further along). `gap: 8`
+ * applies between every consecutive pair, so the shell's own three-dot MENU
+ * button (a fixed 30px square, ALWAYS present) costs one 8px gap plus its
+ * own 30px; `SHELL_EXTRA_XR_PX` is the Exit VR button, which costs a SECOND
+ * 8px gap (the new gap its own appearance inserts before it) on top of ITS
+ * 30px - 38, not merely its own width - and only applies while
+ * `xrSession.active` (see that file's own `Dock` component).
  *
  * This is an approximation of an unexported internal, not a contract: if a
  * future sphere-shell release changes either number, the bubble goes back to
@@ -226,7 +233,7 @@ const TOUR_GAP_PX = 14
  * regression, not a functional one.
  */
 const SHELL_EXTRA_BASE_PX = 8 + 2 + 8 + 30 // gap + divider + gap + the shell's own menu button
-const SHELL_EXTRA_XR_PX = 30 // the Exit VR button, present only in an active XR session
+const SHELL_EXTRA_XR_PX = 8 + 30 // one more gap + the Exit VR button, present only in an active XR session
 
 /**
  * What each icon-only control's hover label says („Sind Tooltipps möglich wenn
