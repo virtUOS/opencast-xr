@@ -70,6 +70,30 @@ stretches to that width; and only the track grows into what row 1 has left over.
 So it re-solves itself when the caption buttons appear, when the breadcrumb
 changes, or when a recording has no series.
 
+### Tutorial tour
+
+**A "Tutorial" checkbox on the start overlay, next to the background choice,
+defaults to ON.** It exists for showing the app at a conference or an open
+house without standing next to every visitor to explain it: while it is on,
+opening a recording walks through the controller bindings and then the dock,
+left to right, as a sequence of speech-bubble panels above the dock —
+"Weiter"/"Fertig" to advance, "Tutorial beenden" on every step to stop early.
+Each step also lights up the control(s) it is talking about with a warm amber
+border, so "the button on the left" always has an obvious answer. The dock
+stays fully clickable underneath the whole time — there is no dimming
+backdrop, and the tour never blocks trying a control it just explained.
+
+**Re-shows once per fresh immersive session, once per page load in the magic
+window.** A new visitor putting the headset on gets the tour again, even if
+someone before them just finished it in the same running app; a magic-window
+visit shows it once and then leaves it alone for the rest of that browser
+tab, even across opening several different recordings. Turning the checkbox
+off (or back on) only changes what the *next* time the tour would start does
+— finishing or skipping a tour that is already showing never touches the
+checkbox itself. The choice persists across reloads, in the same
+`opencastxr.player.*` `localStorage` key family as the caption and background
+preferences.
+
 ### What is on screen when a recording opens
 
 **Only the video windows**, and as large as the comfortable field of view
