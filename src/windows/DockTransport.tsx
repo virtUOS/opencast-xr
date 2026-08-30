@@ -588,8 +588,10 @@ function CrumbRow({
  * shows no transport" (the brief's requirement) true; this component does
  * not re-check `mode` itself. Follows the demo's `PlaybackControls`/
  * `BackgroundControl` idiom (`apps/demo/src/App.tsx`): plain uikit
- * `Container`s with `onClick`+`stopPropagation`, sized to the dock's own
- * 30px-tall row.
+ * `Container`s sized to the dock's own 30px-tall row - though every
+ * discrete press here now goes through `useCapturedPress` (jitter-proof
+ * pointer capture; see `pressCapture.ts`) rather than the demo's raw
+ * `onClick`+`stopPropagation`.
  *
  * All the fraction<->time math, the time label's shape, the play/pause
  * button's visible state, the ray->fraction plane math, and the drag
