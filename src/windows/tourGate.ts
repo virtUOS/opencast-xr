@@ -111,3 +111,65 @@ export function shouldShowTour(state: TourGateState, tutorialEnabled: boolean): 
 export function markTourShown(state: TourGateState): TourGateState {
   return { ...state, shownForEpoch: state.epoch }
 }
+
+/** The player store's own `mode` field shape - duplicated rather than imported, same reasoning as `XrSessionMode` above: this module stays dependency-free. */
+export type PlayerMode = 'browse' | 'player'
+
+export interface TourStartDecisionInput {
+  /**
+   * True exactly on the call that just observed `advanceTourGateEpoch` bump
+   * the epoch (a fresh immersive session starting) - NOT "an immersive
+   * session happens to be active".
+   */
+  epochChanged: boolean
+  /** True exactly on the call that just observed `mode` transition `'browse'` -> `'player'`. */
+  modeEdge: boolean
+  /** The CURRENT player mode, at the moment this is being asked. */
+  mode: PlayerMode
+  enabled: boolean
+  gateState: TourGateState
+}
+
+/**
+ * Whether THIS event - a fresh immersive session starting, or player mode
+ * being entered - should start the tour. The one decision both of
+ * `App.tsx`'s effects (the `xrStore` subscription and the `mode`-edge watch)
+ * call, so `markTourShown` bookkeeping cannot diverge between them - see
+ * `App.tsx`'s `maybeStartTour` for the shared caller.
+ *
+ * ## The bug this closes
+ *
+ * The first cut of this wiring only ever consulted `shouldShowTour` from the
+ * `'browse' -> 'player'` mode edge, never from the epoch-bump itself. That
+ * missed exactly the conference case the whole feature exists for: the next
+ * visitor puts the headset on while the PREVIOUS visitor's recording is
+ * still open (`mode` was already `'player'` and stays `'player'` - there is
+ * no edge to watch, since `openEpisode` short-circuits on the same id and
+ * nothing ever routes back through `'browse'`). The epoch bumped, correctly,
+ * but nothing ever re-checked `shouldShowTour` against the new epoch, so the
+ * tour silently never restarted for that visitor.
+ *
+ * `epochChanged` gives the epoch-bump event its OWN chance to start the
+ * tour, gated on `mode === 'player'` right here (not merely "was player a
+ * moment ago") - if the epoch bumps while still browsing (entering VR from
+ * the library, before opening anything), this answers `false` and the
+ * mode-edge call fires later instead, when the visitor actually opens a
+ * recording. That is what keeps "VR entered from browse, then a recording is
+ * opened" a SINGLE start rather than two: the epoch-bump call sees
+ * `mode !== 'player'` and declines; the later mode-edge call is the only one
+ * that can still see `shouldShowTour` true (nothing marked the epoch shown
+ * in between).
+ *
+ * `modeEdge` is unchanged from before - the ordinary "browse -> player, no
+ * VR at all, or VR was already active with nothing new to signal" case.
+ *
+ * Neither flag alone is sufficient by itself: a call with BOTH `false` (the
+ * gate's own re-render, an unrelated store update) must never start the
+ * tour, so this refuses unless at least one of them is true, in addition to
+ * `shouldShowTour`'s own epoch/`enabled` check.
+ */
+export function tourStartDecision(input: TourStartDecisionInput): boolean {
+  if (input.mode !== 'player') return false
+  if (!input.epochChanged && !input.modeEdge) return false
+  return shouldShowTour(input.gateState, input.enabled)
+}
