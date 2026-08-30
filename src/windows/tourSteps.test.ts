@@ -117,9 +117,19 @@ describe('TOUR_STEPS', () => {
       expect(typeof row === 'object' && row?.badges).toBeUndefined()
     })
 
-    it('both stick rows and the rotate row lead with the stick icon', () => {
+    it('both stick rows and the rotate/dolly rows lead with the stick icon', () => {
       const stickRows = controller.lines.filter((l) => typeof l !== 'string' && l.icon === 'stick')
-      expect(stickRows.length).toBe(3) // left/right scrub, left up/down chapter jump, right rotate
+      // left/right scrub, left up/down chapter jump, right rotate, right dolly
+      expect(stickRows.length).toBe(4)
+    })
+
+    it('the right-stick dolly row names both directions', () => {
+      const row = controller.lines.find(
+        (l) => typeof l !== 'string' && l.icon === 'stick' && tourLineText(l).includes('Rechter Stick vor/zurück'),
+      )
+      expect(row).toBeDefined()
+      expect(tourLineText(row!)).toContain('näher heran')
+      expect(tourLineText(row!)).toContain('weiter weg')
     })
 
     it('the play/pause row carries exactly the A and X badges, in that order', () => {

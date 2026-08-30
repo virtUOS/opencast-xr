@@ -145,6 +145,18 @@ export const TOUR_STEPS: readonly TourStep[] = [
       { badges: ['A', 'X'], text: 'A oder X: Wiedergabe/Pause.' },
       { badges: ['B'], text: 'B gedrückt halten: Ansicht neu zentrieren - der Ring füllt sich.' },
       { icon: 'stick', text: 'Rechter Stick: Ansicht drehen.' },
+      // The line the user's second feedback round asked for: „Beim Tutorial
+      // fehlt noch der hinweis mit dem rechten Stick auch näher ran oder
+      // weggehen zu können." Verified against sphere-shell's own XRControls
+      // (dist/index.js): the right controller's `xr-standard-thumbstick`
+      // yAxis drives a dolly (`moveDelta = forward * -y * DOLLY_SPEED *
+      // delta`) alongside the xAxis rotation above - both live on the SAME
+      // stick, not a separate one. `y` is WebXR's usual convention (negative
+      // = pushed forward/up), so `-y` is positive - i.e. movement ALONG the
+      // view direction - when the stick is pushed forward, and negative
+      // (backward) when it is pulled back: forward-on-the-stick moves the
+      // viewer closer to whatever they're facing, backward moves them away.
+      { icon: 'stick', text: 'Rechter Stick vor/zurück: näher heran oder weiter weg.' },
       'Fenster: am Titelbalken greifen und verschieben - sie rasten aneinander ein. An der Ecke ziehen, um die Größe zu ändern.',
     ],
     highlightIds: [],
