@@ -29,6 +29,7 @@ import {
   useDockBendFrame,
   useShellStore,
   useWindowState,
+  useXRSession,
 } from 'sphere-shell'
 import type { PlayerStoreApi } from '../player/store'
 import type { SeriesStateApi } from './seriesState'
@@ -72,7 +73,7 @@ import {
 } from './timelineDrag'
 import { segmentTickFractions } from './chaptersState'
 import { TOUR_CONTROL_IDS, type TourControlId, type TourStep } from './tourSteps'
-import { TourBubble } from './TourBubble'
+import { TourBubble, TOUR_PANEL_WIDTH_PX } from './TourBubble'
 import { useCapturedPress } from './useCapturedPress'
 
 const BUTTON_ICON_PX = 15
@@ -202,6 +203,30 @@ const TOUR_HIGHLIGHT_BG = '#5a4a1f'
 const TOUR_HIGHLIGHT_BORDER = '#ffcf4d'
 /** Gap between the dock's own control strip and the tour bubble sitting above it. */
 const TOUR_GAP_PX = 14
+
+/**
+ * Extra width sphere-shell's OWN control strip adds beyond this component's
+ * own `SLOT_WIDTH_PX` slot - see the tour bubble's own JSX comment below for
+ * why the bubble has to know about it to center over the REAL dock rather
+ * than just this app's own slot within it („Das Tutorial bitte Mittig dann
+ * über dem Dock").
+ *
+ * Not exported by sphere-shell - `Dock.tsx`'s own `BUTTON_PX`/`MENU_WIDTH_PX`
+ * are module-private - so these two numbers are measured directly from the
+ * installed `sphere-shell/dist/index.js` instead: the control strip's row is
+ * `[this app's slot, a 2px divider, the menu/exit group]`, laid out with an
+ * 8px gap between EACH of those three, and the shell's own three-dot MENU
+ * button is a fixed 30px square that is ALWAYS present. `SHELL_EXTRA_XR_PX`
+ * is the SECOND 30px square next to it - the red Exit VR button - which only
+ * renders while `xrSession.active` (see that file's own `Dock` component).
+ *
+ * This is an approximation of an unexported internal, not a contract: if a
+ * future sphere-shell release changes either number, the bubble goes back to
+ * being slightly off-center rather than broken outright - a cosmetic
+ * regression, not a functional one.
+ */
+const SHELL_EXTRA_BASE_PX = 8 + 2 + 8 + 30 // gap + divider + gap + the shell's own menu button
+const SHELL_EXTRA_XR_PX = 30 // the Exit VR button, present only in an active XR session
 
 /**
  * What each icon-only control's hover label says („Sind Tooltipps möglich wenn
@@ -720,6 +745,12 @@ export function DockTransport({
   // `rayToTrackFractionCurved`'s doc comment in `timelineDrag.ts` for what
   // each field is and why the correction needs all of them together.
   const bendFrame = useDockBendFrame()
+
+  // Whether an XR session is currently active - the ONLY reactive input the
+  // tour bubble's centering needs from the shell (see `SHELL_EXTRA_XR_PX`'s
+  // doc comment: the shell's Exit VR button, and therefore the dock's real
+  // width, only exists while this is true).
+  const xrSession = useXRSession()
 
   const resolveFraction = useCallback(
     (e: ThreeEvent<PointerEvent>): number | null => {
@@ -1480,14 +1511,26 @@ export function DockTransport({
           file's comment history for `positionBottom`'s exact value. Renders
           nothing, and therefore cannot block a click reaching the dock
           underneath, whenever no tour is running (`tour?.step` is
-          `undefined` - the ordinary case). */}
+          `undefined` - the ordinary case).
+
+          `positionLeft` is computed, not `positionLeft={0}/positionRight={0}`
+          plus `alignItems="center"` (the previous approach): that centered
+          the bubble over THIS component's own `SLOT_WIDTH_PX` slot, which is
+          narrower than the REAL rendered dock by `SHELL_EXTRA_BASE_PX` (and,
+          in an active XR session, `SHELL_EXTRA_XR_PX` more) - see those
+          constants' own doc comment. „Das Tutorial bitte Mittig dann über
+          dem Dock" means centered over the dock the viewer actually SEES,
+          not just this app's own slot within it, so the offset is folded in
+          here: the dock's total width, halved, minus half the bubble's own
+          (known, exported) width. */}
       {tour && (
         <Container
           positionType="absolute"
-          positionLeft={0}
-          positionRight={0}
+          positionLeft={
+            (SLOT_WIDTH_PX + SHELL_EXTRA_BASE_PX + (xrSession.active ? SHELL_EXTRA_XR_PX : 0)) / 2 -
+            TOUR_PANEL_WIDTH_PX / 2
+          }
           positionBottom={PLAY_BUTTON_PX + TOUR_GAP_PX}
-          alignItems="center"
         >
           <TourBubble
             step={tour.step}
