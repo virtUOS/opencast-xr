@@ -3,7 +3,7 @@
 // glyphs for certain punctuation, a wrapped-line rendering limit, stale
 // `e.point` under pointer capture) - see `docs/UIKIT-NOTES.md` at the repo
 // root before spending time re-diagnosing one of these from scratch.
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Canvas } from '@react-three/fiber'
 import { XR } from '@react-three/xr'
 import { useStore } from 'zustand'
@@ -22,6 +22,7 @@ import {
   type BackgroundMode,
 } from './backgroundMode'
 import { backgroundPrefsStorage, readBackgroundPrefs, writeBackgroundPrefs } from './backgroundPrefs'
+import { tutorialPrefsStorage, readTutorialPrefs, writeTutorialPrefs } from './tutorialPrefs'
 import { reportPageLoadHit } from './telemetry'
 import { createPlayerStore } from './player/store'
 import { LibraryWindow } from './windows/LibraryWindow'
@@ -35,6 +36,14 @@ import { SubtitleHud } from './windows/SubtitleHud'
 import { XRPlayerControls } from './windows/XRPlayerControls'
 import { createSeriesState } from './windows/seriesState'
 import { SyntheticDualStreamClient } from './dev/syntheticDualStream'
+import { TOUR_STEPS } from './windows/tourSteps'
+import { INITIAL_TOUR_STATE, isLastTourStep, reduceTour } from './windows/tourState'
+import {
+  INITIAL_TOUR_GATE_STATE,
+  advanceTourGateEpoch,
+  markTourShown,
+  shouldShowTour,
+} from './windows/tourGate'
 
 /**
  * Why WebXR is or isn't available, as a short line we can render on screen.
@@ -121,6 +130,80 @@ export function App() {
     })
   }, [playerStore])
   const mode = useStore(playerStore, (s) => s.mode)
+
+  // Whether the tutorial tour is switched on - the start overlay's own
+  // checkbox, next to the background choice. Defaults to ON
+  // (`tutorialPrefs.ts`'s own doc comment: a conference visitor who has never
+  // seen the app needs it explained without anyone finding and flipping a
+  // setting first) and persists across reloads in the same
+  // `opencastxr.player.*` key family as the caption/background prefs.
+  // Completing or skipping a shown tour never writes here - only this
+  // checkbox does (see `setTutorialEnabled` below and `tourGate.ts`'s doc
+  // comment on why the two are kept apart).
+  const tutorialStorage = useMemo(() => tutorialPrefsStorage(), [])
+  const [tutorialEnabled, setTutorialEnabledState] = useState<boolean>(
+    () => readTutorialPrefs(tutorialPrefsStorage()).enabled,
+  )
+  const setTutorialEnabled = useCallback(
+    (enabled: boolean) => {
+      setTutorialEnabledState(enabled)
+      writeTutorialPrefs(tutorialStorage, { enabled })
+    },
+    [tutorialStorage],
+  )
+
+  // The tour's own runtime state (which step, if any, is showing) - see
+  // `windows/tourState.ts`. Advanced/skipped only from the bubble itself
+  // (`DockTransport`'s `tour` prop, below); started only by the effect right
+  // after it.
+  const [tour, setTour] = useState(INITIAL_TOUR_STATE)
+  const advanceTour = useCallback(() => {
+    setTour((state) => reduceTour(state, { type: 'advance' }, TOUR_STEPS.length))
+  }, [])
+  const skipTour = useCallback(() => {
+    setTour((state) => reduceTour(state, { type: 'skip' }, TOUR_STEPS.length))
+  }, [])
+
+  // WHEN the tour is allowed to start - a plain mutable ref, not React state:
+  // nothing ever reads it to render, it is only ever consulted and updated at
+  // the two moments described in `windows/tourGate.ts`'s own doc comment
+  // (a fresh immersive session starting, and player mode being entered).
+  const tourGateRef = useRef(INITIAL_TOUR_GATE_STATE)
+
+  // Bumps the gate's epoch on every FRESH immersive session start - mirrors
+  // the telemetry effect below, which subscribes to the same `xrStore` for
+  // the same reason (reading the ACTUAL granted session mode, not merely a
+  // request). See `tourGate.ts`'s `advanceTourGateEpoch` for why only a
+  // `'none'` -> immersive transition counts.
+  useEffect(() => {
+    return xrStore.subscribe((state) => {
+      // `state.mode` is `@react-three/xr`'s own `XRSessionMode | null` -
+      // wider than `tourGate.ts`'s `XrSessionMode`, which only distinguishes
+      // "no immersive session" from the two this app ever requests
+      // (`sessionModeFor` - `enterVR`/`enterAR` never request `'inline'`).
+      // `null` (before the store's first frame) and `'inline'` both read as
+      // "no session" here, exactly like the library's own explicit `'none'`.
+      const mode = state.mode === 'immersive-vr' || state.mode === 'immersive-ar' ? state.mode : 'none'
+      tourGateRef.current = advanceTourGateEpoch(tourGateRef.current, mode)
+    })
+  }, [])
+
+  // Starts the tour the moment player mode is entered ("wenn der Player
+  // geöffnet wird"), at most once per epoch (see `tourGate.ts`) and only
+  // while the tutorial is switched on. Watches the `'browse' -> 'player'`
+  // EDGE, not merely `mode === 'player'`: the latter would also fire for the
+  // dock's own previous/next episode buttons and the Reihe window (which
+  // change the open episode without ever leaving player mode), re-showing
+  // the tour on every episode change within one visit - which is exactly
+  // what the epoch mechanism exists to prevent.
+  const previousModeRef = useRef(mode)
+  useEffect(() => {
+    if (previousModeRef.current !== 'player' && mode === 'player' && shouldShowTour(tourGateRef.current, tutorialEnabled)) {
+      tourGateRef.current = markTourShown(tourGateRef.current)
+      setTour(reduceTour(INITIAL_TOUR_STATE, { type: 'start' }, TOUR_STEPS.length))
+    }
+    previousModeRef.current = mode
+  }, [mode, tutorialEnabled])
 
   // The open episode's series episode list, fetched ONCE and read by two
   // consumers: `SeriesWindow` (which lists it) and `DockTransport`'s
@@ -414,6 +497,30 @@ export function App() {
             </label>
           </fieldset>
         )}
+        {/* Next to the background choice, but NOT gated behind
+            `xrStatus.kind === 'ready'` like that fieldset is: the tour is
+            just as meaningful for a magic-window visit (no VR entry at all -
+            see `chooseBackgroundRow`'s doc comment on why this app treats
+            that as a first-class way to watch, not a fallback) as it is
+            inside a session, so this control must not disappear on a device
+            that cannot enter VR to begin with. See `tutorialPrefs.ts` for
+            why the default is ON and `tourGate.ts` for when it actually
+            fires. */}
+        <label
+          style={{
+            color: '#e8e8ee', background: '#22222a', border: '1px solid #44444e',
+            borderRadius: 4, padding: '6px 10px', font: '12px system-ui, sans-serif',
+            display: 'flex', gap: 6, alignItems: 'center',
+          }}
+          title="Zeigt beim Öffnen einer Aufzeichnung eine kurze Einführung in Dock und Steuerung - an Sprechblasen an den jeweiligen Buttons. Nützlich, wenn andere die Anwendung ohne Erklärung ausprobieren."
+        >
+          <input
+            type="checkbox"
+            checked={tutorialEnabled}
+            onChange={(e) => setTutorialEnabled(e.target.checked)}
+          />
+          Tutorial
+        </label>
         {xrStatus.kind === 'ready' && (
           <button onClick={enterVR} style={{ padding: '8px 16px' }}>
             VR betreten
@@ -561,7 +668,24 @@ export function App() {
             // browsing, so the dock renders its own default
             // Arrange/Recenter/Exit-VR buttons with no app slot beside them.
             dockControls={
-              mode === 'player' ? <DockTransport store={playerStore} seriesStore={seriesStore} /> : undefined
+              mode === 'player' ? (
+                <DockTransport
+                  store={playerStore}
+                  seriesStore={seriesStore}
+                  tour={
+                    tour.active
+                      ? {
+                          step: TOUR_STEPS[tour.stepIndex]!,
+                          stepNumber: tour.stepIndex + 1,
+                          stepCount: TOUR_STEPS.length,
+                          isLast: isLastTourStep(tour, TOUR_STEPS.length),
+                          onAdvance: advanceTour,
+                          onSkip: skipTour,
+                        }
+                      : undefined
+                  }
+                />
+              ) : undefined
             }
           >
             {mode === 'browse' ? (

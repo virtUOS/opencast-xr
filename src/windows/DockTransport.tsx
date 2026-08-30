@@ -71,6 +71,8 @@ import {
   reduceDrag,
 } from './timelineDrag'
 import { segmentTickFractions } from './chaptersState'
+import { TOUR_CONTROL_IDS, type TourControlId, type TourStep } from './tourSteps'
+import { TourBubble } from './TourBubble'
 
 const BUTTON_ICON_PX = 15
 const SMALL_ICON_PX = 13
@@ -188,6 +190,19 @@ const CRUMB_COLOR = '#cfd8ff'
 const CRUMB_CURRENT_COLOR = '#9a9aa5'
 
 /**
+ * The tutorial tour's "look here" style - see `IconButton`'s `highlighted`
+ * prop and this file's `isHighlighted`/`TOUR_GAP_PX` below. A warm amber,
+ * deliberately far from every other colour already in this dock (the blues of
+ * `ACTIVE_BG`/`CRUMB_COLOR`, the green of the Play/Pause button, the reds
+ * nowhere in this file at all) so a highlighted control cannot be mistaken
+ * for an already-active toggle.
+ */
+const TOUR_HIGHLIGHT_BG = '#5a4a1f'
+const TOUR_HIGHLIGHT_BORDER = '#ffcf4d'
+/** Gap between the dock's own control strip and the tour bubble sitting above it. */
+const TOUR_GAP_PX = 14
+
+/**
  * What each icon-only control's hover label says („Sind Tooltipps möglich wenn
  * man auf die Buttons zeigt?" - yes, this is them).
  *
@@ -270,12 +285,26 @@ const LABEL = {
  * rightward from its button by default, which is wrong for the buttons at the
  * right-hand end of the row, where it would hang off the dock. See the call
  * sites.
+ *
+ * ## `highlighted` - the tutorial tour's "look here"
+ *
+ * True for exactly the controls the tour's CURRENT step is explaining (see
+ * `tourSteps.ts`'s `TourStep.highlightIds` and this file's own
+ * `isHighlighted`). Encoded the same defensive way as the disabled-hover
+ * trap this component's doc comment already describes: `background` and
+ * `borderColor` are always concrete values, never conditionally `undefined`,
+ * with "not highlighted" spelled as `borderWidth={0}` and a border colour
+ * equal to the resting background - never by omitting the prop (see
+ * `docs/UIKIT-NOTES.md` entry 1, which is about `hover` specifically but the
+ * same "never toggle a prop to/from `undefined`" caution is applied here on
+ * principle).
  */
 function IconButton({
   size = ROW_HEIGHT_PX,
   background = BUTTON_BG,
   hoverBackground = BUTTON_BG_HOVER,
   disabled = false,
+  highlighted = false,
   label,
   labelAlign = 'left',
   onPress,
@@ -285,6 +314,8 @@ function IconButton({
   background?: string
   hoverBackground?: string
   disabled?: boolean
+  /** True while the tutorial tour is pointing at this control - see the doc comment above. */
+  highlighted?: boolean
   /** What the hover label says. German, plain ASCII-safe text - see the doc comment. */
   label: string
   /** `'right'` for a button near the end of the row, so its label grows inward. */
@@ -292,6 +323,8 @@ function IconButton({
   onPress: () => void
   children: ReactNode
 }) {
+  const restingBackground = highlighted ? TOUR_HIGHLIGHT_BG : background
+  const hoveredBackground = highlighted ? TOUR_HIGHLIGHT_BG : hoverBackground
   return (
     <HoverLabel label={label} controlHeight={size} align={labelAlign}>
       <Container
@@ -299,9 +332,11 @@ function IconButton({
         height={size}
         alignItems="center"
         justifyContent="center"
-        backgroundColor={background}
+        backgroundColor={restingBackground}
         borderRadius={6}
-        hover={{ backgroundColor: disabled ? background : hoverBackground }}
+        borderWidth={highlighted ? 2 : 0}
+        borderColor={highlighted ? TOUR_HIGHLIGHT_BORDER : restingBackground}
+        hover={{ backgroundColor: disabled ? restingBackground : hoveredBackground }}
         onClick={(e) => {
           e.stopPropagation()
           if (disabled) return
@@ -582,13 +617,26 @@ function IconButton({
  * `subtitleHudState.ts`'s `seekFeedback` and `SubtitleHud.tsx`'s own doc
  * comment for the rest of that path.
  */
+/** What `App.tsx` hands down to run the tutorial tour - absent entirely (`undefined`) whenever no tour is active, which is the ordinary case (see `tourGate.ts`). */
+export interface DockTransportTour {
+  step: TourStep
+  stepNumber: number
+  stepCount: number
+  isLast: boolean
+  onAdvance: () => void
+  onSkip: () => void
+}
+
 export function DockTransport({
   store,
   seriesStore,
+  tour,
 }: {
   store: PlayerStoreApi
   /** The ONE series-episode-list store `App.tsx` owns, shared with `SeriesWindow` - see this file's doc comment. */
   seriesStore: SeriesStateApi
+  /** The tutorial tour's current step, or `undefined` while no tour is running - see `App.tsx`'s own tour wiring (`tourState.ts`/`tourGate.ts`) and `TourBubble.tsx`. */
+  tour?: DockTransportTour
 }) {
   const episode = useStore(store, (s) => s.episode)
   const currentTimeS = useStore(store, (s) => s.currentTimeS)
@@ -985,6 +1033,12 @@ export function DockTransport({
 
   const captionsActive = subtitlesOn && !subtitlesDisabled
 
+  // Which controls the tour's CURRENT step is pointing at - `[]` whenever no
+  // tour is running, or the running step highlights nothing (the controller
+  // bindings step, and the shell-owned menu/exit step - see `tourSteps.ts`).
+  const highlightIds = tour?.step.highlightIds
+  const isHighlighted = (id: TourControlId): boolean => highlightIds?.includes(id) ?? false
+
   return (
     <Container flexDirection="row" alignItems="center" gap={8} width={SLOT_WIDTH_PX}>
       {/* Play/Pause, spanning both rows. Square and 60 px on a side - by far
@@ -1001,6 +1055,12 @@ export function DockTransport({
           justifyContent="center"
           backgroundColor="#2f6f4f"
           borderRadius={8}
+          // The tour's highlight is a ring, not a background swap, here -
+          // unlike `IconButton`'s `highlighted`, this button's green already
+          // carries its own meaning ("this is the one to press"), so
+          // replacing it would fight that instead of adding to it.
+          borderWidth={isHighlighted(TOUR_CONTROL_IDS.playPause) ? 3 : 0}
+          borderColor={isHighlighted(TOUR_CONTROL_IDS.playPause) ? TOUR_HIGHLIGHT_BORDER : '#2f6f4f'}
           hover={{ backgroundColor: '#3f9f6f' }}
           onClick={(e) => {
             e.stopPropagation()
@@ -1029,7 +1089,23 @@ export function DockTransport({
             they have always been - flanking the track - at the user's explicit
             request („Die Abspielposition und Dauer koennen da bleiben wo sie
             gerade sind"). */}
-        <Container height={ROW_HEIGHT_PX} flexDirection="row" alignItems="center" gap={8}>
+        <Container
+          height={ROW_HEIGHT_PX}
+          flexDirection="row"
+          alignItems="center"
+          gap={8}
+          borderRadius={6}
+          // The timeline highlight lives on this wrapping row, not the 6px
+          // track alone (`TRACK_HEIGHT_PX`) - a thin bar's own border would
+          // be easy to miss at a glance; the whole row, time readouts
+          // included, is what actually reads as "look here".
+          borderWidth={isHighlighted(TOUR_CONTROL_IDS.timeline) ? 2 : 0}
+          // Always a real, parseable colour - see `IconButton`'s doc comment
+          // on never toggling a uikit prop to/from something invalid; with
+          // `borderWidth={0}` this never actually renders when not
+          // highlighted.
+          borderColor={TOUR_HIGHLIGHT_BORDER}
+        >
           <Text fontSize={11} color="#cfd8ff" width={TIME_LABEL_WIDTH_PX} textAlign="right">
             {currentLabel}
           </Text>
@@ -1042,6 +1118,10 @@ export function DockTransport({
             height={TRACK_HEIGHT_PX}
             borderRadius={TRACK_HEIGHT_PX / 2}
             backgroundColor="#33333d"
+            // A thin track needs a bigger visual cue than a border alone -
+            // the whole row it sits in (time labels included) is what
+            // actually catches the eye, so the highlight is drawn on the
+            // wrapping row below, not just on the track itself.
             onPointerDown={onTrackPointerDown}
             onPointerMove={onTrackPointerMove}
             onPointerUp={onTrackPointerUp}
@@ -1097,6 +1177,17 @@ export function DockTransport({
         {/* ROW 2: where you are, the neighbouring recordings, and every
             remaining control. */}
         <Container flexDirection="row" alignItems="center" gap={4}>
+          {/* Wraps just the breadcrumb crumbs - the prev/next `IconButton`s
+              beside it (below) carry their own `highlighted` prop instead,
+              since they are not part of this trail. */}
+          <Container
+            flexDirection="row"
+            alignItems="center"
+            gap={4}
+            borderRadius={6}
+            borderWidth={isHighlighted(TOUR_CONTROL_IDS.breadcrumb) ? 2 : 0}
+            borderColor={TOUR_HIGHLIGHT_BORDER}
+          >
           {trail.map((crumb, index) => {
             // The last crumb is no longer inert: it opens (and closes) the
             // Reihe window, and says so with a list icon. Only when there IS a
@@ -1156,12 +1247,14 @@ export function DockTransport({
               </Container>
             )
           })}
+          </Container>
 
           {showNeighbours && (
             <Container flexDirection="row" alignItems="center" gap={4} marginLeft={4}>
               <IconButton
                 size={CRUMB_ROW_HEIGHT_PX}
                 disabled={neighbours.previous == null}
+                highlighted={isHighlighted(TOUR_CONTROL_IDS.previousEpisode)}
                 label={LABEL.previousEpisode}
                 onPress={() => openNeighbour(neighbours.previous?.id)}
               >
@@ -1174,6 +1267,7 @@ export function DockTransport({
               <IconButton
                 size={CRUMB_ROW_HEIGHT_PX}
                 disabled={neighbours.next == null}
+                highlighted={isHighlighted(TOUR_CONTROL_IDS.nextEpisode)}
                 label={LABEL.nextEpisode}
                 onPress={() => openNeighbour(neighbours.next?.id)}
               >
@@ -1198,6 +1292,7 @@ export function DockTransport({
             background={captionsActive ? ACTIVE_BG : BUTTON_BG}
             hoverBackground={captionsActive ? ACTIVE_BG_HOVER : BUTTON_BG_HOVER}
             disabled={subtitlesDisabled}
+            highlighted={isHighlighted(TOUR_CONTROL_IDS.captionsToggle)}
             // Names the state the press moves TO, like the shell's own
             // Curved/Flat button - see LABEL.
             label={captionsActive ? LABEL.captionsOff : LABEL.captionsOn}
@@ -1211,6 +1306,7 @@ export function DockTransport({
               <IconButton
                 size={CRUMB_ROW_HEIGHT_PX}
                 disabled={subtitleScale <= MIN_CAPTION_SCALE}
+                highlighted={isHighlighted(TOUR_CONTROL_IDS.captionSmaller)}
                 label={LABEL.captionSmaller}
                 onPress={() => stepSize(-1)}
               >
@@ -1229,6 +1325,7 @@ export function DockTransport({
               <IconButton
                 size={CRUMB_ROW_HEIGHT_PX}
                 disabled={subtitleScale >= MAX_CAPTION_SCALE}
+                highlighted={isHighlighted(TOUR_CONTROL_IDS.captionLarger)}
                 label={LABEL.captionLarger}
                 onPress={() => stepSize(1)}
               >
@@ -1241,6 +1338,7 @@ export function DockTransport({
               <IconButton
                 size={CRUMB_ROW_HEIGHT_PX}
                 disabled={subtitleOffsetDeg >= MAX_CAPTION_OFFSET_DEG}
+                highlighted={isHighlighted(TOUR_CONTROL_IDS.captionUp)}
                 label={LABEL.captionUp}
                 onPress={() => stepOffset(1)}
               >
@@ -1253,6 +1351,7 @@ export function DockTransport({
               <IconButton
                 size={CRUMB_ROW_HEIGHT_PX}
                 disabled={subtitleOffsetDeg <= MIN_CAPTION_OFFSET_DEG}
+                highlighted={isHighlighted(TOUR_CONTROL_IDS.captionDown)}
                 label={LABEL.captionDown}
                 onPress={() => stepOffset(-1)}
               >
@@ -1275,6 +1374,7 @@ export function DockTransport({
             size={CRUMB_ROW_HEIGHT_PX}
             background={muted ? ACTIVE_BG : BUTTON_BG}
             hoverBackground={muted ? ACTIVE_BG_HOVER : BUTTON_BG_HOVER}
+            highlighted={isHighlighted(TOUR_CONTROL_IDS.mute)}
             label={muted ? LABEL.unmute : LABEL.mute}
             labelAlign="right"
             onPress={toggleMuted}
@@ -1284,6 +1384,7 @@ export function DockTransport({
           <IconButton
             size={CRUMB_ROW_HEIGHT_PX}
             disabled={volume <= 0}
+            highlighted={isHighlighted(TOUR_CONTROL_IDS.volumeDown)}
             label={LABEL.volumeDown}
             labelAlign="right"
             onPress={() => applyVolumeStep(-1)}
@@ -1296,6 +1397,7 @@ export function DockTransport({
           <IconButton
             size={CRUMB_ROW_HEIGHT_PX}
             disabled={volume >= 1}
+            highlighted={isHighlighted(TOUR_CONTROL_IDS.volumeUp)}
             label={LABEL.volumeUp}
             labelAlign="right"
             onPress={() => applyVolumeStep(1)}
@@ -1328,6 +1430,7 @@ export function DockTransport({
             background={transcriptOpen ? ACTIVE_BG : BUTTON_BG}
             hoverBackground={transcriptOpen ? ACTIVE_BG_HOVER : BUTTON_BG_HOVER}
             disabled={!transcriptAvailable}
+            highlighted={isHighlighted(TOUR_CONTROL_IDS.transcript)}
             label={LABEL.transcript}
             labelAlign="right"
             onPress={() => togglePanel(PANEL_WINDOW_IDS.transcript, transcriptWindow)}
@@ -1342,6 +1445,7 @@ export function DockTransport({
             size={CRUMB_ROW_HEIGHT_PX}
             background={infoOpen ? ACTIVE_BG : BUTTON_BG}
             hoverBackground={infoOpen ? ACTIVE_BG_HOVER : BUTTON_BG_HOVER}
+            highlighted={isHighlighted(TOUR_CONTROL_IDS.info)}
             label={LABEL.info}
             labelAlign="right"
             onPress={() => togglePanel(PANEL_WINDOW_IDS.info, infoWindow)}
@@ -1350,6 +1454,39 @@ export function DockTransport({
           </IconButton>
         </Container>
       </Container>
+
+      {/* The tutorial tour's bubble - a sibling of the two rows above, NOT a
+          `<HeadLocked>` (unlike `SubtitleHud.tsx`'s captions): it has to sit
+          ABOVE THE DOCK specifically, following the dock's own curved bend
+          when sphere-shell renders it that way, which only holds while it is
+          part of THIS component's own tree - see `TourBubble.tsx`'s doc
+          comment. Positioned absolutely relative to this component's own
+          outermost container (the same technique the fill bar/tick marks
+          above use relative to the track), with `positionBottom` set so its
+          own bottom edge (the speech-bubble tail) lands `TOUR_GAP_PX` above
+          this container's top edge - see the worked derivation in this
+          file's comment history for `positionBottom`'s exact value. Renders
+          nothing, and therefore cannot block a click reaching the dock
+          underneath, whenever no tour is running (`tour?.step` is
+          `undefined` - the ordinary case). */}
+      {tour && (
+        <Container
+          positionType="absolute"
+          positionLeft={0}
+          positionRight={0}
+          positionBottom={PLAY_BUTTON_PX + TOUR_GAP_PX}
+          alignItems="center"
+        >
+          <TourBubble
+            step={tour.step}
+            stepNumber={tour.stepNumber}
+            stepCount={tour.stepCount}
+            isLast={tour.isLast}
+            onAdvance={tour.onAdvance}
+            onSkip={tour.onSkip}
+          />
+        </Container>
+      )}
     </Container>
   )
 }
