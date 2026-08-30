@@ -18,6 +18,7 @@ import {
   videoWindowId,
   videoWindowPlacement,
 } from './videoWindowState'
+import { useCapturedPress } from './useCapturedPress'
 
 /**
  * Keeps ONE flavor's shell window and its stream in agreement, in both
@@ -195,6 +196,11 @@ function StreamErrorTile({
   hint: string | null
   onReload: () => void
 }) {
+  // Pointer-captured press, not `onClick` - see `pressCapture.ts`'s doc
+  // comment. Matters more here than on most buttons in this app: it is the
+  // ONLY way out of a failed stream, so losing a press to drift would strand
+  // the viewer on a dead tile.
+  const press = useCapturedPress(onReload)
   return (
     <Container
       flexGrow={1}
@@ -214,10 +220,9 @@ function StreamErrorTile({
         // Always a plain object, never a conditional `undefined` - see
         // ControlsWindow.tsx's doc comment on the uikit reconciler crash.
         hover={{ backgroundColor: RELOAD_BG_HOVER }}
-        onClick={(e) => {
-          e.stopPropagation()
-          onReload()
-        }}
+        onPointerDown={press.onPointerDown}
+        onPointerUp={press.onPointerUp}
+        onPointerCancel={press.onPointerCancel}
       >
         {/* Hit-transparent - see sphere-shell's DECORATIVE_POINTER_EVENTS.
             This one matters: it is the only way out of a failed stream. */}

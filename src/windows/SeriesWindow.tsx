@@ -8,6 +8,7 @@ import { toEpisodeTile } from './libraryState'
 import { PANEL_WINDOW_IDS } from './panelWindows'
 import { useStartClosed } from './useStartClosed'
 import type { SeriesStateApi } from './seriesState'
+import { useCapturedPress } from './useCapturedPress'
 
 const RETRY_LABEL = 'Erneut versuchen'
 
@@ -17,7 +18,12 @@ const RETRY_LABEL = 'Erneut versuchen'
 const SERIES_AZIMUTH_DEG = 55
 const PANEL_ELEVATION_DEG = -26
 
+// Structurally identical to `LibraryWindow.tsx`'s own `ErrorPanel` - both
+// migrated to `useCapturedPress` in the same code-review pass (round 1
+// Important 2): a drifting Quest ray must not lose a retry press here
+// either. See `pressCapture.ts`'s doc comment for the full reasoning.
 function ErrorPanel({ message, onRetry }: { message: string; onRetry: () => void }) {
+  const press = useCapturedPress(onRetry)
   return (
     <Container flexDirection="column" gap={10} padding={12} alignItems="flex-start">
       <Text fontSize={13} color="#ffd8de">{message}</Text>
@@ -27,10 +33,9 @@ function ErrorPanel({ message, onRetry }: { message: string; onRetry: () => void
         borderRadius={6}
         backgroundColor="#3a2028"
         hover={{ backgroundColor: '#542c38' }}
-        onClick={(e) => {
-          e.stopPropagation()
-          onRetry()
-        }}
+        onPointerDown={press.onPointerDown}
+        onPointerUp={press.onPointerUp}
+        onPointerCancel={press.onPointerCancel}
       >
         {/* Hit-transparent - see sphere-shell's DECORATIVE_POINTER_EVENTS. */}
         <Text fontSize={12} color="#ffd8de" pointerEvents={DECORATIVE_POINTER_EVENTS}>
@@ -102,6 +107,14 @@ export function SeriesWindow({
     [store, currentEpisodeId],
   )
 
+  // Called unconditionally (hooks can't live inside `{openError && ...}`
+  // JSX) - the guard on `openError` moves inside the callback instead. Same
+  // pointer-captured press as `ErrorPanel` above; see `pressCapture.ts`'s
+  // doc comment.
+  const retryOpenError = useCapturedPress(() => {
+    if (openError) selectEpisode(openError.id)
+  })
+
   const items = useMemo(() => episodes.map(toEpisodeTile), [episodes])
 
   // Defensive only: App.tsx gates mounting this window on
@@ -135,10 +148,9 @@ export function SeriesWindow({
               borderRadius={4}
               backgroundColor="#542c38"
               hover={{ backgroundColor: '#6a3a48' }}
-              onClick={(e) => {
-                e.stopPropagation()
-                selectEpisode(openError.id)
-              }}
+              onPointerDown={retryOpenError.onPointerDown}
+              onPointerUp={retryOpenError.onPointerUp}
+              onPointerCancel={retryOpenError.onPointerCancel}
             >
               <Text fontSize={12} color="#ffd8de" pointerEvents={DECORATIVE_POINTER_EVENTS}>
                 {RETRY_LABEL}

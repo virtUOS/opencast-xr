@@ -1,11 +1,12 @@
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, type MutableRefObject } from 'react'
 import { useStore } from 'zustand'
 import { Container, Text, type VanillaContainer } from '@react-three/uikit'
 import { DECORATIVE_POINTER_EVENTS, Window } from 'sphere-shell'
 import type { PlayerStoreApi } from '../player/store'
-import { activeCueIndex, shouldAutoScroll, transcriptRows } from './transcriptState'
+import { activeCueIndex, shouldAutoScroll, transcriptRows, type TranscriptRow } from './transcriptState'
 import { PANEL_WINDOW_IDS, panelWindowAvailable } from './panelWindows'
 import { useStartClosed } from './useStartClosed'
+import { useCapturedPress } from './useCapturedPress'
 
 // Same reserved-but-unused flank azimuth family as `videoWindowState.ts`'s
 // SIDE_AZIMUTH_DEG (55) and `chaptersState.ts`'s CHAPTERS_AZIMUTH_DEG
@@ -119,6 +120,67 @@ const EMPTY_TEXT = 'Kein Transkript.' // unreachable in practice - this componen
  * confirmed working end-to-end; it simply has no real-fixture footage of its
  * own to show for this task, only the synthetic one.
  */
+/**
+ * One transcript row - a real component, not inline JSX inside the
+ * `rows.map()` below: `useCapturedPress` is a hook, and hooks cannot be
+ * called from inside a loop callback. One row per cue, keyed by `row.id` at
+ * the call site, gives each row its own hook state exactly like
+ * `MediaList.tsx`'s `MediaListRow` / `DockTransport.tsx`'s `CrumbRow`.
+ *
+ * `activeRowRef` is a single ref cell shared across every row instance (not
+ * one ref per row) - see this file's own doc comment ("Auto-scroll") for why
+ * only the currently-active row ever needs to register into it.
+ */
+function TranscriptRowItem({
+  row,
+  active,
+  activeRowRef,
+  onSeek,
+}: {
+  row: TranscriptRow
+  active: boolean
+  activeRowRef: MutableRefObject<VanillaContainer | null>
+  onSeek: (cueIndex: number) => void
+}) {
+  const press = useCapturedPress(() => onSeek(row.cueIndex))
+  return (
+    <Container
+      ref={active ? (instance: VanillaContainer | null) => { activeRowRef.current = instance } : undefined}
+      // Load-bearing, not a defensive default - see this file's own
+      // doc comment ("Row overlap at realistic transcript length")
+      // and docs/UIKIT-NOTES.md entry 8: without it, every row's
+      // own auto-height shrinks as more rows exist in this same
+      // scrolling column, and at a real transcript's row count it
+      // collapses to the padding floor - which is what "rows
+      // overlapping" turned out to be.
+      flexShrink={0}
+      padding={6}
+      borderRadius={4}
+      backgroundColor={active ? ACTIVE_BG : RESTING_BG}
+      // Always a plain object - see docs/UIKIT-NOTES.md entry 1:
+      // toggling `hover` between an object and `undefined` across
+      // renders is a reproduced uikit crash.
+      hover={{ backgroundColor: active ? ACTIVE_BG : HOVER_BG }}
+      onPointerDown={press.onPointerDown}
+      onPointerUp={press.onPointerUp}
+      onPointerCancel={press.onPointerCancel}
+    >
+      {/* Hit-transparent, so the ROW is one hit object. The text
+          fills the row, so without this nearly every press lands on
+          the text and the click survives only if the release lands on
+          exactly the same text object - see sphere-shell's
+          DECORATIVE_POINTER_EVENTS. */}
+      <Text
+        fontSize={13}
+        color={active ? '#ffffff' : '#c9c9d2'}
+        pointerEvents={DECORATIVE_POINTER_EVENTS}
+      >
+        {row.text}
+      </Text>
+    </Container>
+  )
+}
+
 export function TranscriptWindow({ store }: { store: PlayerStoreApi }) {
   // Starts as a dock tile rather than on the shell - see `panelWindows.ts`.
   useStartClosed(PANEL_WINDOW_IDS.transcript)
@@ -200,47 +262,15 @@ export function TranscriptWindow({ store }: { store: PlayerStoreApi }) {
         {rows.length === 0 ? (
           <Text fontSize={14} color="#9a9aa5">{EMPTY_TEXT}</Text>
         ) : (
-          rows.map((row) => {
-            const active = row.cueIndex === activeIndex
-            return (
-              <Container
-                key={row.id}
-                ref={active ? (instance: VanillaContainer | null) => { activeRowRef.current = instance } : undefined}
-                // Load-bearing, not a defensive default - see this file's own
-                // doc comment ("Row overlap at realistic transcript length")
-                // and docs/UIKIT-NOTES.md entry 8: without it, every row's
-                // own auto-height shrinks as more rows exist in this same
-                // scrolling column, and at a real transcript's row count it
-                // collapses to the padding floor - which is what "rows
-                // overlapping" turned out to be.
-                flexShrink={0}
-                padding={6}
-                borderRadius={4}
-                backgroundColor={active ? ACTIVE_BG : RESTING_BG}
-                // Always a plain object - see docs/UIKIT-NOTES.md entry 1:
-                // toggling `hover` between an object and `undefined` across
-                // renders is a reproduced uikit crash.
-                hover={{ backgroundColor: active ? ACTIVE_BG : HOVER_BG }}
-                onClick={(e) => {
-                  e.stopPropagation()
-                  seekToCue(row.cueIndex)
-                }}
-              >
-                {/* Hit-transparent, so the ROW is one hit object. The text
-                    fills the row, so without this nearly every press lands on
-                    the text and the click survives only if the release lands on
-                    exactly the same text object - see sphere-shell's
-                    DECORATIVE_POINTER_EVENTS. */}
-                <Text
-                  fontSize={13}
-                  color={active ? '#ffffff' : '#c9c9d2'}
-                  pointerEvents={DECORATIVE_POINTER_EVENTS}
-                >
-                  {row.text}
-                </Text>
-              </Container>
-            )
-          })
+          rows.map((row) => (
+            <TranscriptRowItem
+              key={row.id}
+              row={row}
+              active={row.cueIndex === activeIndex}
+              activeRowRef={activeRowRef}
+              onSeek={seekToCue}
+            />
+          ))
         )}
       </Container>
     </Window>
