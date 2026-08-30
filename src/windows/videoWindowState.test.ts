@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { bentHalfExtentDegrees } from 'sphere-shell'
 import {
   MAIN_AZIMUTH_DEG,
   MAIN_WIDTH_DEG,
@@ -7,11 +8,14 @@ import {
   SIDE_WIDTH_DEG,
   VIDEO_ASPECT,
   libraryReturnTarget,
+  pairAzimuthDeg,
   streamErrorEscapeHint,
   streamWindowAction,
   videoWindowId,
   videoWindowPlacement,
   PAIR_AZIMUTH_DEG,
+  PAIR_AZIMUTH_DEG_FLAT,
+  PAIR_EDGE_SNAP_GAP_DEG,
   PAIR_WIDTH_DEG,
   SOLO_WIDTH_DEG,
   type StreamWindowSyncInput,
@@ -113,6 +117,63 @@ describe('videoWindowPlacement', () => {
       const { size, position } = videoWindowPlacement(index, count)
       expect(position.elevation - size.height / 2).toBeGreaterThan(-26)
     }
+  })
+
+  describe('the pair layout matches what edge-snapping would produce (third Quest round)', () => {
+    it('pairAzimuthDeg is the same half-extent-plus-half-gap math snapPosition uses', () => {
+      expect(pairAzimuthDeg(10, 2)).toBe(11)
+      expect(pairAzimuthDeg(26.717460766910566, 0.5)).toBeCloseTo(26.967460766910566, 10)
+    })
+
+    it('the curved (default) pair centres are bentHalfExtentDegrees(width) + gap/2 per side', () => {
+      const expectedAzimuth = bentHalfExtentDegrees(PAIR_WIDTH_DEG) + PAIR_EDGE_SNAP_GAP_DEG / 2
+      expect(PAIR_AZIMUTH_DEG).toBeCloseTo(expectedAzimuth, 10)
+      expect(videoWindowPlacement(0, 2).position.azimuth).toBeCloseTo(-expectedAzimuth, 10)
+      expect(videoWindowPlacement(1, 2).position.azimuth).toBeCloseTo(expectedAzimuth, 10)
+    })
+
+    it('the curved pair ends up EXACTLY PAIR_EDGE_SNAP_GAP_DEG apart at their bent inner edges', () => {
+      // The whole point of this round: on arrival the pair looks exactly like
+      // two windows dragged together and snapped, not merely close to it.
+      const halfExtent = bentHalfExtentDegrees(PAIR_WIDTH_DEG)
+      const { position } = videoWindowPlacement(0, 2)
+      const gap = 2 * (Math.abs(position.azimuth) - halfExtent)
+      expect(gap).toBeCloseTo(PAIR_EDGE_SNAP_GAP_DEG, 10)
+    })
+
+    it('the curved pair still fits inside the +-55 deg comfortable arc once its BENT (rendered) edge is counted', () => {
+      // Distinct from the nominal-width check below: curving widens a
+      // window's rendered azimuth half-extent past its nominal half-width, so
+      // a pair that looks fine in nominal terms can still poke past the arc
+      // once actually bent onto the shell - this is the check that caught it.
+      const halfExtent = bentHalfExtentDegrees(PAIR_WIDTH_DEG)
+      const { position } = videoWindowPlacement(0, 2)
+      expect(Math.abs(position.azimuth) + halfExtent).toBeLessThanOrEqual(55)
+    })
+
+    it('the flat-fallback pair (curved unavailable) uses the nominal half-width instead', () => {
+      const expectedAzimuth = PAIR_WIDTH_DEG / 2 + PAIR_EDGE_SNAP_GAP_DEG / 2
+      expect(PAIR_AZIMUTH_DEG_FLAT).toBeCloseTo(expectedAzimuth, 10)
+      // The flat half-extent is always smaller than the curved one, so the
+      // flat variant's azimuth (and thus its footprint) is always the more
+      // conservative of the two.
+      expect(PAIR_AZIMUTH_DEG_FLAT).toBeLessThan(PAIR_AZIMUTH_DEG)
+      expect(videoWindowPlacement(0, 2, false)).toEqual({
+        size: { width: PAIR_WIDTH_DEG, height: PAIR_WIDTH_DEG / VIDEO_ASPECT },
+        position: { azimuth: -PAIR_AZIMUTH_DEG_FLAT, elevation: 0 },
+      })
+      expect(videoWindowPlacement(1, 2, false).position.azimuth).toBeCloseTo(PAIR_AZIMUTH_DEG_FLAT, 10)
+    })
+
+    it('the flat-fallback pair also ends up exactly PAIR_EDGE_SNAP_GAP_DEG apart at its (nominal) inner edges', () => {
+      const { position } = videoWindowPlacement(0, 2, false)
+      const gap = 2 * (Math.abs(position.azimuth) - PAIR_WIDTH_DEG / 2)
+      expect(gap).toBeCloseTo(PAIR_EDGE_SNAP_GAP_DEG, 10)
+    })
+
+    it('defaults to curved when the caller does not say - matching App.tsx\'s unconditional `curved` prop', () => {
+      expect(videoWindowPlacement(0, 2)).toEqual(videoWindowPlacement(0, 2, true))
+    })
   })
 
   it('leaves the two main windows at their old +-24 deg once a THIRD stream exists', () => {

@@ -1,4 +1,4 @@
-import type { AngularSize, SphericalPosition } from 'sphere-shell'
+import { bentHalfExtentDegrees, type AngularSize, type SphericalPosition } from 'sphere-shell'
 import type { Episode } from '../opencast/types'
 import type { BrowseTarget } from '../player/store'
 
@@ -44,21 +44,98 @@ export const VIDEO_ASPECT = 16 / 9
  * no second window to leave room for, so it gets 64 degrees: half-width 32,
  * comfortably inside the budget, and half-height 18, clear of the dock.
  *
- * With TWO it is 52 degrees each at +-27, i.e. the pair spans -53..53 with a
- * 2-degree gap between them - as wide as two streams can be while both stay
- * inside the comfortable arc. That is a 30 % linear (69 % area) increase on the
- * 40 degrees they had before.
- *
  * THREE or more keeps the previous layout unchanged (40-degree mains, 24-degree
  * flanks): with a flank pair already out at +-55 there is no width left to give
  * away, and no real recording gets there anyway - only this app's dev-only
- * „Zweiter Stream (Test)" toggle produces even a second stream.
+ * „Zweiter Stream (Test)" toggle produces even a second stream. NOTE: this
+ * older layout predates both curved mode and edge-snapping, and its 24-degree
+ * azimuth for a 40-degree-wide window is a hand-tuned FLAT gap (8 degrees,
+ * `2 * (24 - 40/2)`), not the bent/snap-gap formula the pair layout uses below
+ * - it is a different, larger, pre-existing inconsistency that this round
+ * leaves alone (see the third Quest round's own feedback below for why the
+ * TWO-stream case is the one actually reported as too spaced-out).
+ *
+ * ## Third round: „die Fenster sind weiter auseinander als beim Repositionieren"
+ *
+ * A THIRD round of feedback reported the PAIR layout above (originally 52
+ * degrees each at +-27, a flush 2-degree gap) as visibly more spaced out than
+ * two windows the user had just dragged together and let snap - and separately
+ * asked for the snap gap itself to be tighter: `WindowShell`'s
+ * `edgeSnapGapDegrees` (`App.tsx`) is now `PAIR_EDGE_SNAP_GAP_DEG` (0.5, down
+ * from the library's own default of 1.0) rather than the old, uncoordinated 2.
+ *
+ * The two numbers were never derived from the same formula. `edgeSnapGapDegrees`
+ * widens a snapped pair's CURVED (bent) touch-target half-extents -
+ * `bentHalfExtentDegrees(width)`, not `width / 2` - by the gap on each side (see
+ * sphere-shell's `snapPosition` doc comment for why: curving preserves arc
+ * length, so a bent window's rendered half-extent is LARGER than its nominal
+ * one, and two windows placed flush in nominal-azimuth terms physically
+ * overlap once bent). The old PAIR_AZIMUTH_DEG (27) was chosen against the
+ * NOMINAL half-width (26) plus a flat 1-degree gap - it never accounted for the
+ * bend, so the pair's actual on-screen gap under curved mode (this shell's
+ * default) was `2 * (bentHalfExtentDegrees(52) - 26) ≈ 3.89` degrees, nearly
+ * double the reported-too-loose 2-degree design intent and almost 8x the new
+ * snap gap.
+ *
+ * `pairAzimuthDeg` below reproduces the SAME math `snapPosition` does for a
+ * dragged pair: `halfExtentDeg + gapDeg / 2` per side, so the two centres end
+ * up exactly `gapDeg` apart at the edge - not merely close to it. With the
+ * curved half-extent (this shell's default) that is
+ * `bentHalfExtentDegrees(52) + 0.5/2 ≈ 27.945 + 0.25 = 28.195` degrees, i.e. a
+ * pair spanning roughly -56.14..56.14 once its BENT edges are counted -
+ * 1.14 degrees past the documented +-55 comfortable arc. Rather than accept
+ * that overshoot, `PAIR_WIDTH_DEG` itself shrinks from 52 to 50: at 50 wide,
+ * `bentHalfExtentDegrees(50) ≈ 26.717`, `PAIR_AZIMUTH_DEG ≈ 26.717 + 0.25 =
+ * 26.967`, and the bent outer edge lands at `26.967 + 26.717 ≈ 53.68` -
+ * comfortably inside +-55 again, with about 1.3 degrees to spare. That is
+ * still a 25 % linear (56 % area) increase on the 40 degrees a main window had
+ * before curved mode and snapping existed - a smaller jump than the 30 %/69 %
+ * the previous round shipped, traded away specifically to keep the pair
+ * inside the arc once the bend is honestly accounted for.
+ *
+ * ## The flat fallback
+ *
+ * `curved` is requested unconditionally in `App.tsx` (a hard-coded prop, not
+ * derived from any state at the point this layout is computed), so
+ * `videoWindowPlacement`'s own `curved` parameter defaults to `true` and no
+ * caller in this app passes anything else. The one way curved mode does NOT
+ * end up on screen is `curvedAvailable: false` - sphere-shell's own hardware
+ * fallback when it detects its shader injection no longer applies (EXPERIMENTAL,
+ * `useCurvedAvailable()`) - which can only be known once the shell has
+ * mounted and run a frame, after this window's OWN initial position has
+ * already been chosen. Threading that live signal back into a start layout
+ * computed once, this early, would be a lot of plumbing for a rare hardware
+ * fallback path; the flat variant (`curved: false`, nominal `width / 2` half-
+ * extents) is kept here as a tested, exact formula for that case - and for
+ * documentation - even though nothing in this app currently calls it that way.
  */
 export const SOLO_WIDTH_DEG = 64
 /** Angular width of each of the two main windows when the recording has exactly two streams. */
-export const PAIR_WIDTH_DEG = 52
-/** ...placed symmetrically about straight-ahead at this azimuth (half-width plus half the gap). */
-export const PAIR_AZIMUTH_DEG = 27
+export const PAIR_WIDTH_DEG = 50
+/**
+ * Extra space, in degrees, left between a pair's edges - the SAME number
+ * passed to `WindowShell`'s `edgeSnapGapDegrees` prop in `App.tsx`. Kept as
+ * one exported constant, not two separately-typed `0.5` literals, so the
+ * start layout and the drag-to-snap behaviour cannot drift back apart the way
+ * they did before this round (see the doc comment above).
+ */
+export const PAIR_EDGE_SNAP_GAP_DEG = 0.5
+/**
+ * Centre azimuth for one window of a symmetric two-window pair whose INNER
+ * (touching) edges end up exactly `gapDeg` apart - the same
+ * `halfExtentDeg + gapDeg / 2` sphere-shell's `snapPosition` uses for a
+ * dragged-together pair. `halfExtentDeg` must be whichever azimuth
+ * half-extent is actually being RENDERED: `bentHalfExtentDegrees(width)` under
+ * curved (this shell's default), or `width / 2` flat - see this file's own
+ * doc comment, "The flat fallback".
+ */
+export function pairAzimuthDeg(halfExtentDeg: number, gapDeg: number): number {
+  return halfExtentDeg + gapDeg / 2
+}
+/** ...placed symmetrically about straight-ahead at this azimuth - curved (this shell's default); see `pairAzimuthDeg` and this file's doc comment for the derivation. */
+export const PAIR_AZIMUTH_DEG = pairAzimuthDeg(bentHalfExtentDegrees(PAIR_WIDTH_DEG), PAIR_EDGE_SNAP_GAP_DEG)
+/** The flat-fallback counterpart of `PAIR_AZIMUTH_DEG` - see this file's doc comment, "The flat fallback". */
+export const PAIR_AZIMUTH_DEG_FLAT = pairAzimuthDeg(PAIR_WIDTH_DEG / 2, PAIR_EDGE_SNAP_GAP_DEG)
 /** Angular width of the first two streams' windows once a THIRD stream exists. */
 export const MAIN_WIDTH_DEG = 40
 /** ...placed symmetrically about straight-ahead at this azimuth. */
@@ -94,8 +171,17 @@ export interface VideoWindowPlacement {
  * would be clamped by the shell - acceptable, since no real Opencast recording
  * has eight video flavors, and a clamped-but-visible window beats an off-shell
  * one.
+ *
+ * @param curved whether the PAIR case (the only one this affects) should use
+ *   the curved (bent) azimuth or the flat fallback - see this file's doc
+ *   comment, "The flat fallback", for why this defaults to `true` and why no
+ *   caller in this app passes anything else today.
  */
-export function videoWindowPlacement(index: number, streamCount: number): VideoWindowPlacement {
+export function videoWindowPlacement(
+  index: number,
+  streamCount: number,
+  curved = true,
+): VideoWindowPlacement {
   const side = index % 2 === 0 ? -1 : 1
   // A count that does not contain `index` (a caller mid-swap, a defensive 0)
   // must not produce a smaller window than the index itself implies.
@@ -109,7 +195,8 @@ export function videoWindowPlacement(index: number, streamCount: number): VideoW
   }
   if (index < 2) {
     const width = count === 2 ? PAIR_WIDTH_DEG : MAIN_WIDTH_DEG
-    const azimuth = count === 2 ? PAIR_AZIMUTH_DEG : MAIN_AZIMUTH_DEG
+    const azimuth =
+      count === 2 ? (curved ? PAIR_AZIMUTH_DEG : PAIR_AZIMUTH_DEG_FLAT) : MAIN_AZIMUTH_DEG
     return {
       size: { width, height: width / VIDEO_ASPECT },
       position: { azimuth: side * azimuth, elevation: 0 },

@@ -27,6 +27,7 @@ import { reportPageLoadHit } from './telemetry'
 import { createPlayerStore } from './player/store'
 import { LibraryWindow } from './windows/LibraryWindow'
 import { VideoWindows } from './windows/VideoWindows'
+import { PAIR_EDGE_SNAP_GAP_DEG } from './windows/videoWindowState'
 import { DockTransport } from './windows/DockTransport'
 import { ControlsWindow } from './windows/ControlsWindow'
 import { ChaptersWindow } from './windows/ChaptersWindow'
@@ -690,6 +691,16 @@ export function App() {
             // consequence of this flip: timeline-scrub accuracy under curved
             // mode is a known, tracked limitation, not a new bug.
             curved
+            // A Quest 3 session found a magnetically-snapped pair of windows
+            // too tightly packed together under the library's own default
+            // (1.0 deg): „Gern ein wenig mehr Abstand wählen" was the OPPOSITE
+            // ask that motivated sphere-shell 0.3.4's default in the first
+            // place, but this app's own hardware feedback round wants it
+            // tighter still. `PAIR_EDGE_SNAP_GAP_DEG` (0.5) is shared with
+            // `videoWindowState.ts`'s pair START layout - see that file's doc
+            // comment - so a viewer who drags two windows apart and lets them
+            // snap back together sees exactly the same gap they started with.
+            edgeSnapGapDegrees={PAIR_EDGE_SNAP_GAP_DEG}
             // „Taste A und X für Play/Pause. Taste B dann zum Neuzentrieren."
             // The right controller has exactly two face buttons, and the
             // library's default binds A to a hold-to-recenter — so taking A for
