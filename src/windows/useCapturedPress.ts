@@ -15,6 +15,14 @@ import { type PressEffect, type PressState, initialPressState, reducePress } fro
  * native-event/DOM-button concern, not part of the press/release/capture
  * decision `pressCapture.ts`'s own tests cover.
  *
+ * The right-click check in `onPointerDown` runs BEFORE `e.stopPropagation()`,
+ * deliberately: a right-click on a button never called `stopPropagation`
+ * under the old `onClick` either (the browser's own `click` synthesis simply
+ * never fired for it, so nothing downstream of that ran), so an early return
+ * ahead of the call preserves that exact pre-existing behaviour - a
+ * right-click still propagates normally (e.g. to a background look-drag),
+ * same as before this fix (code review round 1, Minor 2).
+ *
  * `e.stopPropagation()` on both `pointerdown` and `pointerup` - unconditional,
  * matching every existing button's own `onClick` in this app (which always
  * stopped propagation before its `disabled` check), PLUS the `pointerdown`
