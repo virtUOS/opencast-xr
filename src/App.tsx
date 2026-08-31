@@ -45,6 +45,7 @@ import {
   markTourShown,
   tourStartDecision,
 } from './windows/tourGate'
+import { guardXRStoreSubscriber } from './xrStoreSubscriberGuard'
 
 /**
  * Why WebXR is or isn't available, as a short line we can render on screen.
@@ -216,18 +217,28 @@ export function App() {
   // library (nothing open yet) does not start the tour early - see
   // `tourStartDecision`'s own doc comment and `tourGate.test.ts`'s "four
   // scenarios" for the traced-through proof.
+  //
+  // The whole body runs through `guardXRStoreSubscriber` - see that module's
+  // doc comment for why a subscriber here must never be allowed to throw:
+  // `xrStore` notifies every subscriber synchronously from inside `setState`
+  // via a bare `Set.forEach`, which has no exception isolation, and
+  // `DockTransport`'s own `useXRSession()` subscription (mounted fresh every
+  // time player mode is entered) always lands AFTER this one in that same
+  // notification order.
   useEffect(() => {
     return xrStore.subscribe((state) => {
-      // `state.mode` is `@react-three/xr`'s own `XRSessionMode | null` -
-      // wider than `tourGate.ts`'s `XrSessionMode`, which only distinguishes
-      // "no immersive session" from the two this app ever requests
-      // (`sessionModeFor` - `enterVR`/`enterAR` never request `'inline'`).
-      // `null` (before the store's first frame) and `'inline'` both read as
-      // "no session" here, exactly like the library's own explicit `'none'`.
-      const xrMode = state.mode === 'immersive-vr' || state.mode === 'immersive-ar' ? state.mode : 'none'
-      const epochBefore = tourGateRef.current.epoch
-      tourGateRef.current = advanceTourGateEpoch(tourGateRef.current, xrMode)
-      maybeStartTour({ epochChanged: tourGateRef.current.epoch !== epochBefore, modeEdge: false })
+      guardXRStoreSubscriber('tour gate', () => {
+        // `state.mode` is `@react-three/xr`'s own `XRSessionMode | null` -
+        // wider than `tourGate.ts`'s `XrSessionMode`, which only distinguishes
+        // "no immersive session" from the two this app ever requests
+        // (`sessionModeFor` - `enterVR`/`enterAR` never request `'inline'`).
+        // `null` (before the store's first frame) and `'inline'` both read as
+        // "no session" here, exactly like the library's own explicit `'none'`.
+        const xrMode = state.mode === 'immersive-vr' || state.mode === 'immersive-ar' ? state.mode : 'none'
+        const epochBefore = tourGateRef.current.epoch
+        tourGateRef.current = advanceTourGateEpoch(tourGateRef.current, xrMode)
+        maybeStartTour({ epochChanged: tourGateRef.current.epoch !== epochBefore, modeEdge: false })
+      })
     })
   }, [maybeStartTour])
 
@@ -376,11 +387,21 @@ export function App() {
   // relies on via `sessionModeFor`. Re-entering the same mode later in this
   // page load sends nothing further (see telemetry.ts's module doc comment
   // on why that's the deliberate choice, not a gap).
+  // Guarded the same way, and for the same reason, as the tour-gate
+  // subscriber above (`guardXRStoreSubscriber`'s own doc comment) - even
+  // though `reportPageLoadHit` already cannot throw on its own
+  // (`telemetry.ts`'s `reportHit` swallows everything the transport does),
+  // this stays wrapped too: the guard's whole point is that NOTHING
+  // registered on `xrStore` from this codebase is allowed to be the one that
+  // breaks a later subscriber's notification, regardless of whether today's
+  // body happens to be provably safe already.
   useEffect(() => {
     if (import.meta.env.DEV) return
     return xrStore.subscribe((state) => {
-      if (state.mode === 'immersive-vr') reportPageLoadHit('vr')
-      else if (state.mode === 'immersive-ar') reportPageLoadHit('ar')
+      guardXRStoreSubscriber('telemetry', () => {
+        if (state.mode === 'immersive-vr') reportPageLoadHit('vr')
+        else if (state.mode === 'immersive-ar') reportPageLoadHit('ar')
+      })
     })
   }, [])
 
