@@ -2,83 +2,83 @@
  * Decides WHEN the tutorial tour should start - as opposed to `tourState.ts`,
  * which only knows how to walk through it once it has.
  *
- * ## The rule, from the brief
+ * ## The rule (kiosk mode, from the conference brief)
  *
- * „Wenn der Player geöffnet wird" the tour should appear - but not on every
- * single episode change, or a viewer who opens a second recording mid-visit
- * would sit through the same seven-step tour twice in a row. The agreed rule
- * has two halves:
+ * While the start overlay's tutorial toggle is on, the tour starts fresh
+ * from step 1 on EVERY "start of the player" - every time a recording is
+ * opened (a `'browse' -> 'player'` transition), AND every time a FRESH
+ * immersive session begins while a recording is already open (the next
+ * visitor dons the headset while the previous one's recording is still on
+ * screen - "jeder neue Besucher setzt die Brille auf" is a fresh person who
+ * has never seen it). There is deliberately no "already shown this
+ * session/page load" suppression: „Der Tutorial Modus wird nur beim Ersten
+ * mal nach dem Start der VR angezeigt. Ich wollte das für die Konferenz aber
+ * bei jedem Start des Players" - a kiosk visitor should see it explained
+ * every single time, not just the first, in the magic window exactly as much
+ * as in a headset.
  *
- * - **Inside an immersive session**, the tour starts every time a NEW session
- *   begins and the player is then opened - "jeder neue Besucher setzt die
- *   Brille auf" is a fresh person who has never seen it, so re-showing per
- *   session (not per page load) is the point, not a bug to suppress.
- * - **In the magic window** (no immersive session - a desktop/tablet visit,
- *   which this project treats as a first-class way to use the app, not a
- *   fallback - see `App.tsx`'s own background-choice comment), there is no
- *   "new visitor" signal at all, so it shows once per PAGE LOAD instead:
- *   opening a second recording in the same tab does not repeat it.
+ * An earlier round suppressed all of this after the first showing (an
+ * incrementing `epoch`, a `shownForEpoch` marker, `markTourShown`) - that
+ * machinery is gone. `tourStartDecision`'s SHAPE survives unchanged though:
+ * two edge flags, the current mode, the toggle, still funnelled through one
+ * shared decision (see its own doc comment for why) - the kiosk rule turned
+ * out to be the simpler one to express, not a bigger state machine.
  *
- * ## The mechanism: an epoch, bumped once per fresh immersive session
+ * ## The mechanism: two edges, one shared decision
  *
- * `epoch` starts at 0 - "no session yet this page load", which is also the
- * permanent state of a magic-window visit. It is bumped by exactly one every
- * time `advanceTourGateEpoch` sees the WebXR session mode transition from
- * `'none'` to an immersive one - i.e. a session actually STARTING, not merely
- * being active. `shownForEpoch` records which epoch the tour was last shown
- * for (or `null`, never); `shouldShowTour` is simply "the tutorial is on, and
- * the current epoch has not had its tour yet".
+ * - `sessionStarted` - a genuine `'none' -> immersive` WebXR transition,
+ *   reported by `advanceTourGate`'s `TourGateTransition`.
+ * - `modeEdge` - a genuine `'browse' -> 'player'` transition in the player
+ *   store's own `mode`.
  *
- * A magic-window visit never bumps the epoch (it stays 0 for the whole page
- * load), so `shownForEpoch` reaching 0 - after the FIRST player-mode entry -
- * is what makes every later one in the same tab a no-op: exactly the "once
- * per page load" half of the rule. Entering a fresh immersive session bumps
- * the epoch, so `shownForEpoch` (still pointing at the last epoch it fired
- * for) no longer matches, and the very first player-mode entry of that new
- * session shows the tour again: the "every new visitor" half.
- *
- * This module is agnostic of WHEN it is called from - it holds no timers, no
- * subscriptions, and does not import `xrStore`/`App.tsx`. `advanceTourGateEpoch`
- * is meant to be fed every WebXR session-mode change (`xrStore.subscribe` in
- * `App.tsx`, mirroring `telemetry.ts`'s own subscription there) and
- * `shouldShowTour`/`markTourShown` are meant to be consulted exactly at the
- * moment player mode is entered (the player store's `mode` becoming
- * `'player'`).
+ * Both are EDGES, not levels: `mode === 'player'` staying true across an
+ * unrelated store update, or a session staying active across an unrelated
+ * `xrStore` update, must never re-trigger this - only the instant either one
+ * actually flips does. `App.tsx`'s two effects each detect their own edge and
+ * funnel through `tourStartDecision`, so the "is this actually player mode
+ * right now" and "is the tutorial switched on" checks live in exactly one
+ * place rather than being duplicated (and potentially drifting) between them.
  *
  * ## Why this never touches the persisted toggle
  *
- * `tutorialEnabled` is a PARAMETER to `shouldShowTour`, read live from
+ * `tutorialEnabled` is a PARAMETER to `tourStartDecision`, read live from
  * `tutorialPrefs.ts` by the caller - never stored in `TourGateState` itself.
  * Completing or skipping a shown tour must never flip that preference (only
- * the start overlay's own checkbox does - see that module's doc comment), and
- * keeping the two concerns in separate places is what makes that true by
- * construction rather than by a rule someone has to remember not to break.
+ * the start overlay's own checkbox does - see that module's doc comment).
+ *
+ * ## Why this module knows nothing about WHEN it is called from
+ *
+ * No timers, no subscriptions, no import of `xrStore`/`App.tsx`/the player
+ * store. `advanceTourGate` is meant to be fed every WebXR session-mode change
+ * (`xrStore.subscribe` in `App.tsx`, mirroring `telemetry.ts`'s own
+ * subscription there) and `tourStartDecision` is meant to be consulted at
+ * both of the two moments its own doc comment names.
  */
 export interface TourGateState {
-  /** Bumped by one on every FRESH immersive session start. 0 for the whole of a magic-window page load. */
-  epoch: number
-  /** Whether an immersive session is active right now - the edge-detector `advanceTourGateEpoch` bumps `epoch` on. */
+  /** Whether an immersive session is active right now - the edge-detector `advanceTourGate` tracks. */
   xrActive: boolean
-  /** The epoch the tour was last shown for, or `null` if it never has been this page load. */
-  shownForEpoch: number | null
 }
 
-export const INITIAL_TOUR_GATE_STATE: TourGateState = {
-  epoch: 0,
-  xrActive: false,
-  shownForEpoch: null,
-}
+export const INITIAL_TOUR_GATE_STATE: TourGateState = { xrActive: false }
 
 /** The WebXR session mode shape this module cares about - a subset of `@react-three/xr`'s own `XRState['mode']`. */
 export type XrSessionMode = 'none' | 'immersive-vr' | 'immersive-ar'
 
+/** `advanceTourGate`'s result: the gate's next state, and whether THIS call observed a fresh session start. */
+export interface TourGateTransition {
+  /** Always write this back to the caller's own gate ref, even when `sessionStarted` is `false`. */
+  state: TourGateState
+  /**
+   * True exactly when `mode` reports a session that was not active a moment
+   * ago (`'none'` -> an immersive mode) - a real "a session just started"
+   * edge, not merely "a session happens to be active". A session ENDING
+   * (immersive -> `'none'`) updates `state` but this is always `false` then:
+   * ending is not the event the tour cares about, only starting is.
+   */
+  sessionStarted: boolean
+}
+
 /**
- * Advances the epoch exactly when `mode` reports a session that was not
- * active a moment ago (`'none'` -> an immersive mode) - a real "a session
- * just started" edge, not merely "a session happens to be active". A session
- * ENDING (immersive -> `'none'`) updates `xrActive` but never bumps the
- * epoch: ending is not the event this tour cares about, only starting is.
- *
  * `'immersive-vr'` -> `'immersive-ar'` directly (or the reverse) is not a
  * transition this app's own code ever produces - `App.tsx`'s
  * `chooseBackgroundRow` always ends the running session first, so the mode
@@ -86,90 +86,59 @@ export type XrSessionMode = 'none' | 'immersive-vr' | 'immersive-ar'
  * function's own doc comment for why re-entering directly is not attempted).
  * This function is still total over the type regardless: a direct switch
  * between the two immersive modes leaves `xrActive` true throughout and
- * therefore does not bump the epoch either, which is a defensible reading
- * (the running session did not, from this state machine's perspective, ever
- * stop) even though the app's own flow never exercises it.
+ * therefore reports no session start either (a defensible reading - the
+ * running session did not, from this state machine's perspective, ever stop)
+ * even though the app's own flow never exercises it.
  */
-export function advanceTourGateEpoch(state: TourGateState, mode: XrSessionMode): TourGateState {
+export function advanceTourGate(state: TourGateState, mode: XrSessionMode): TourGateTransition {
   const nowActive = mode !== 'none'
-  if (nowActive === state.xrActive) return state
-  if (nowActive) return { ...state, xrActive: true, epoch: state.epoch + 1 }
-  return { ...state, xrActive: false }
-}
-
-/**
- * Whether entering player mode right now should start the tour. `false`
- * whenever the tutorial is switched off, regardless of epoch - and otherwise
- * `true` at most once per epoch, per the doc comment above.
- */
-export function shouldShowTour(state: TourGateState, tutorialEnabled: boolean): boolean {
-  if (!tutorialEnabled) return false
-  return state.shownForEpoch !== state.epoch
-}
-
-/** Records that the tour was just shown, for the gate's CURRENT epoch - call this exactly when (not before) the tour actually starts. */
-export function markTourShown(state: TourGateState): TourGateState {
-  return { ...state, shownForEpoch: state.epoch }
+  if (nowActive === state.xrActive) return { state, sessionStarted: false }
+  return { state: { xrActive: nowActive }, sessionStarted: nowActive }
 }
 
 /** The player store's own `mode` field shape - duplicated rather than imported, same reasoning as `XrSessionMode` above: this module stays dependency-free. */
 export type PlayerMode = 'browse' | 'player'
 
 export interface TourStartDecisionInput {
-  /**
-   * True exactly on the call that just observed `advanceTourGateEpoch` bump
-   * the epoch (a fresh immersive session starting) - NOT "an immersive
-   * session happens to be active".
-   */
-  epochChanged: boolean
+  /** True exactly on the call that just observed `advanceTourGate` report a fresh immersive session start - NOT "an immersive session happens to be active". */
+  sessionStarted: boolean
   /** True exactly on the call that just observed `mode` transition `'browse'` -> `'player'`. */
   modeEdge: boolean
   /** The CURRENT player mode, at the moment this is being asked. */
   mode: PlayerMode
   enabled: boolean
-  gateState: TourGateState
 }
 
 /**
  * Whether THIS event - a fresh immersive session starting, or player mode
  * being entered - should start the tour. The one decision both of
  * `App.tsx`'s effects (the `xrStore` subscription and the `mode`-edge watch)
- * call, so `markTourShown` bookkeeping cannot diverge between them - see
- * `App.tsx`'s `maybeStartTour` for the shared caller.
+ * call, so the two can never disagree about what counts as "a start of the
+ * player" - see `App.tsx`'s `maybeStartTour` for the shared caller.
  *
- * ## The bug this closes
+ * `false` whenever the tutorial toggle is off, or `mode` is not currently
+ * `'player'` - entering VR from the library (nothing open yet) must not
+ * start the tour early; see the scenario below for exactly when the LATER
+ * mode-edge call picks that case up instead. Otherwise `true` whenever
+ * EITHER `sessionStarted` or `modeEdge` is set - there is no further
+ * "already shown" check anymore (see this module's own doc comment for why).
  *
- * The first cut of this wiring only ever consulted `shouldShowTour` from the
- * `'browse' -> 'player'` mode edge, never from the epoch-bump itself. That
- * missed exactly the conference case the whole feature exists for: the next
- * visitor puts the headset on while the PREVIOUS visitor's recording is
- * still open (`mode` was already `'player'` and stays `'player'` - there is
- * no edge to watch, since `openEpisode` short-circuits on the same id and
- * nothing ever routes back through `'browse'`). The epoch bumped, correctly,
- * but nothing ever re-checked `shouldShowTour` against the new epoch, so the
- * tour silently never restarted for that visitor.
- *
- * `epochChanged` gives the epoch-bump event its OWN chance to start the
+ * `sessionStarted` gives the epoch-bump event its own chance to start the
  * tour, gated on `mode === 'player'` right here (not merely "was player a
- * moment ago") - if the epoch bumps while still browsing (entering VR from
- * the library, before opening anything), this answers `false` and the
- * mode-edge call fires later instead, when the visitor actually opens a
- * recording. That is what keeps "VR entered from browse, then a recording is
- * opened" a SINGLE start rather than two: the epoch-bump call sees
- * `mode !== 'player'` and declines; the later mode-edge call is the only one
- * that can still see `shouldShowTour` true (nothing marked the epoch shown
- * in between).
+ * moment ago") - if a fresh session starts while still browsing, this
+ * answers `false` and the mode-edge call fires later instead, when the
+ * visitor actually opens a recording. That is what keeps "VR entered from
+ * browse, then a recording is opened" a SINGLE start rather than two: the
+ * session-start call sees `mode !== 'player'` and declines; the later
+ * mode-edge call is the one that actually starts it.
  *
- * `modeEdge` is unchanged from before - the ordinary "browse -> player, no
- * VR at all, or VR was already active with nothing new to signal" case.
- *
- * Neither flag alone is sufficient by itself: a call with BOTH `false` (the
- * gate's own re-render, an unrelated store update) must never start the
- * tour, so this refuses unless at least one of them is true, in addition to
- * `shouldShowTour`'s own epoch/`enabled` check.
+ * Neither flag alone is sufficient by itself: a call with BOTH `false` (an
+ * unrelated store update) must never start the tour, so this refuses unless
+ * at least one of them is true, in addition to the `enabled`/`mode` checks
+ * above.
  */
 export function tourStartDecision(input: TourStartDecisionInput): boolean {
+  if (!input.enabled) return false
   if (input.mode !== 'player') return false
-  if (!input.epochChanged && !input.modeEdge) return false
-  return shouldShowTour(input.gateState, input.enabled)
+  return input.sessionStarted || input.modeEdge
 }

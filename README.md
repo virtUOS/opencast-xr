@@ -83,14 +83,17 @@ border, so "the button on the left" always has an obvious answer. The dock
 stays fully clickable underneath the whole time — there is no dimming
 backdrop, and the tour never blocks trying a control it just explained.
 
-**Re-shows once per fresh immersive session, once per page load in the magic
-window.** A new visitor putting the headset on gets the tour again, even if
-someone before them just finished it in the same running app; a magic-window
-visit shows it once and then leaves it alone for the rest of that browser
-tab, even across opening several different recordings. Turning the checkbox
-off (or back on) only changes what the *next* time the tour would start does
-— finishing or skipping a tour that is already showing never touches the
-checkbox itself. The choice persists across reloads, in the same
+**Re-shows on every start of the player, in either mode — no "already seen
+it" suppression.** Kiosk behaviour, by request: opening a recording always
+starts it fresh from step 1, whether that is the first recording opened in
+the tab or the fifth; a new visitor putting the headset on gets it again too,
+even if someone before them just finished it in the same running app, and
+even while the previous visitor's recording is still open (no need to return
+to the library first). Finishing or skipping a tour only closes the one
+currently showing — it comes back the next time a recording is opened.
+Turning the checkbox off (or back on) only changes what the *next* start of
+the player does — finishing or skipping a tour that is already showing never
+touches the checkbox itself. The choice persists across reloads, in the same
 `opencastxr.player.*` `localStorage` key family as the caption and background
 preferences.
 

@@ -39,12 +39,7 @@ import { createSeriesState } from './windows/seriesState'
 import { SyntheticDualStreamClient } from './dev/syntheticDualStream'
 import { TOUR_STEPS } from './windows/tourSteps'
 import { INITIAL_TOUR_STATE, isLastTourStep, reduceTour } from './windows/tourState'
-import {
-  INITIAL_TOUR_GATE_STATE,
-  advanceTourGateEpoch,
-  markTourShown,
-  tourStartDecision,
-} from './windows/tourGate'
+import { INITIAL_TOUR_GATE_STATE, advanceTourGate, tourStartDecision } from './windows/tourGate'
 import { guardXRStoreSubscriber } from './xrStoreSubscriberGuard'
 
 /**
@@ -170,48 +165,51 @@ export function App() {
   // nothing ever reads it to render, it is only ever consulted and updated at
   // the two moments described in `windows/tourGate.ts`'s own doc comment
   // (a fresh immersive session starting, and player mode being entered).
+  // Holds only `xrActive` now (kiosk-mode simplification - see tourGate.ts's
+  // own doc comment): there is no more "already shown" bookkeeping to track
+  // here, only enough state for `advanceTourGate` to tell a genuine
+  // session-start edge apart from "the session happens to still be active".
   const tourGateRef = useRef(INITIAL_TOUR_GATE_STATE)
 
   // The ONE place either of the two effects below is allowed to start the
-  // tour - both funnel through this, so `markTourShown`'s bookkeeping cannot
-  // diverge between them (fix-round finding: the first cut had the epoch-bump
-  // effect update the gate but never consult `tourStartDecision`/`markTourShown`
-  // at all, which is exactly the conference bug below fixes). `mode` is read
-  // fresh from the store here rather than closed over from the component's
-  // own `mode` variable, so this never acts on a stale value regardless of
-  // which effect (and which dependency array) calls it.
+  // tour - both funnel through this, so the two can never disagree about
+  // what counts as "a start of the player" (fix-round finding: the first cut
+  // had the epoch-bump effect update the gate but never consult
+  // `tourStartDecision` at all, which is exactly the conference bug the
+  // sibling effect below fixes). `mode` is read fresh from the store here
+  // rather than closed over from the component's own `mode` variable, so
+  // this never acts on a stale value regardless of which effect (and which
+  // dependency array) calls it.
   const maybeStartTour = useCallback(
-    (edge: { epochChanged: boolean; modeEdge: boolean }) => {
+    (edge: { sessionStarted: boolean; modeEdge: boolean }) => {
       const currentMode = playerStore.getState().mode
       if (
         tourStartDecision({
-          epochChanged: edge.epochChanged,
+          sessionStarted: edge.sessionStarted,
           modeEdge: edge.modeEdge,
           mode: currentMode,
           enabled: tutorialEnabled,
-          gateState: tourGateRef.current,
         })
       ) {
-        tourGateRef.current = markTourShown(tourGateRef.current)
         setTour(reduceTour(INITIAL_TOUR_STATE, { type: 'start' }, TOUR_STEPS.length))
       }
     },
     [playerStore, tutorialEnabled],
   )
 
-  // Bumps the gate's epoch on every FRESH immersive session start - mirrors
-  // the telemetry effect below, which subscribes to the same `xrStore` for
-  // the same reason (reading the ACTUAL granted session mode, not merely a
-  // request). See `tourGate.ts`'s `advanceTourGateEpoch` for why only a
-  // `'none'` -> immersive transition counts.
+  // Tracks `xrActive` on every WebXR session-mode change - mirrors the
+  // telemetry effect below, which subscribes to the same `xrStore` for the
+  // same reason (reading the ACTUAL granted session mode, not merely a
+  // request). See `tourGate.ts`'s `advanceTourGate` for why only a `'none'`
+  // -> immersive transition reports `sessionStarted`.
   //
-  // ALSO calls `maybeStartTour` on that same bump - not just `App.tsx`'s
+  // ALSO calls `maybeStartTour` on that same edge - not just `App.tsx`'s
   // other effect below - because a fresh session can start while player mode
   // is ALREADY active and never leaves it: the exact conference case this
   // feature exists for (the next visitor dons the headset while the
   // previous visitor's recording is still open - `openEpisode` short-
   // circuits on the same id, so there is no `'browse' -> 'player'` edge
-  // anywhere in that trace for the other effect to catch). `epochChanged`
+  // anywhere in that trace for the other effect to catch). `sessionStarted`
   // being true is what lets `tourStartDecision` fire here; it still refuses
   // unless `mode` is ALSO `'player'` right now, so entering VR from the
   // library (nothing open yet) does not start the tour early - see
@@ -235,27 +233,25 @@ export function App() {
         // `null` (before the store's first frame) and `'inline'` both read as
         // "no session" here, exactly like the library's own explicit `'none'`.
         const xrMode = state.mode === 'immersive-vr' || state.mode === 'immersive-ar' ? state.mode : 'none'
-        const epochBefore = tourGateRef.current.epoch
-        tourGateRef.current = advanceTourGateEpoch(tourGateRef.current, xrMode)
-        maybeStartTour({ epochChanged: tourGateRef.current.epoch !== epochBefore, modeEdge: false })
+        const { state: nextGate, sessionStarted } = advanceTourGate(tourGateRef.current, xrMode)
+        tourGateRef.current = nextGate
+        maybeStartTour({ sessionStarted, modeEdge: false })
       })
     })
   }, [maybeStartTour])
 
   // Starts the tour the moment player mode is entered ("wenn der Player
-  // geöffnet wird"). Watches the `'browse' -> 'player'` EDGE, not merely
+  // geöffnet wird") - EVERY time, per the kiosk brief (see tourGate.ts's own
+  // doc comment). Watches the `'browse' -> 'player'` EDGE, not merely
   // `mode === 'player'`: the latter would also fire for the dock's own
   // previous/next episode buttons and the Reihe window (which change the
-  // open episode without ever leaving player mode), re-showing the tour on
-  // every episode change within one visit - `tourStartDecision`'s own
-  // `shouldShowTour` epoch check is what actually decides whether THIS edge
-  // still gets to start it (e.g. it does nothing if the effect above just
-  // started it for the same epoch already - see `tourGate.test.ts`
-  // scenario 3, "VR entered from browse, then a recording is opened").
+  // open episode without ever leaving player mode) - those must still NOT
+  // re-show the tour (the brief only asks for "every start of the player",
+  // not "every episode change within one already-open session").
   const previousModeRef = useRef(mode)
   useEffect(() => {
     if (previousModeRef.current !== 'player' && mode === 'player') {
-      maybeStartTour({ epochChanged: false, modeEdge: true })
+      maybeStartTour({ sessionStarted: false, modeEdge: true })
     }
     previousModeRef.current = mode
   }, [mode, maybeStartTour])
