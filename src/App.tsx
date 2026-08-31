@@ -486,7 +486,15 @@ export function App() {
    */
   const chooseBackgroundRow = useCallback(() => {
     chooseBackground(otherBackground(effectiveBackground))
-    xrStore.getState().session?.end()
+    // Deferred, exactly like sphere-shell 0.3.7's own Exit-X fix: this row is
+    // a capture-click inside @pmndrs/pointer-events' up() dispatch, which has
+    // no exception isolation - a synchronous session.end() here runs mid-
+    // dispatch and is the same 0.3.5-class hazard that broke exiting VR on
+    // the Quest ("Browser läuft angeblich noch im Hintergrund"). Re-read the
+    // session at fire time and swallow the already-ending rejection.
+    queueMicrotask(() => {
+      void Promise.resolve(xrStore.getState().session?.end()).catch(() => {})
+    })
   }, [effectiveBackground, chooseBackground])
 
   // Hidden rather than shown-disabled: `AppDockMenuItem` has no `enabled`
