@@ -100,15 +100,19 @@ preferences.
 ### What is on screen when a recording opens
 
 **Only the video windows**, and as large as the comfortable field of view
-allows: one stream gets 64° of azimuth centred straight ahead, a pair gets 52°
-each at ±27°. Both are derived from a usable arc of about ±55° (a Quest 3 sees
-roughly 110° at once) and from the dock's own −30° elevation, not chosen by eye.
-A third stream and beyond keeps the earlier layout: 40° mains, 24° flanks.
+allows: one stream gets 64° of azimuth centred straight ahead, a pair gets 50°
+each at ±≈27° - positioned by the same bent-edge-plus-snap-gap math the edge
+snapping uses, so a fresh pair looks exactly like two windows snapped together
+(0.5° apart), and its bent outer edges stay inside the usable arc of about
+±55° (a Quest 3 sees roughly 110° at once). See `videoWindowState.ts` for the
+arithmetic. A third stream and beyond keeps the earlier layout: 40° mains,
+24° flanks.
 
-**Kapitel, Transkript, Reihe and Info start closed**, each as a dock tile — the
-same closed-window tile the shell already uses, so getting one back is the
-click you already know. The Reihe window also opens from the breadcrumb's last
-crumb and Info from the dock's ⓘ. Opening a *different* recording from within
+**Kapitel, Transkript, Reihe and Info start closed.** Only Kapitel keeps a
+dock tile (the same closed-window tile the shell already uses); Transkript,
+Reihe and Info have their own dedicated dock controls instead - the Transkript
+button, the breadcrumb's last crumb, and ⓘ - so they render no tile
+(`dockTile={false}`). Opening a *different* recording from within
 player mode leaves whatever you arranged alone; the panels only start closed
 when you enter player mode from the library.
 

@@ -47,6 +47,14 @@
  * real bug (unlike `telemetry.ts`'s deliberately-silent transport failures,
  * which are an EXPECTED "no counter deployed" case) - it should be visible in
  * devtools, just never allowed to reach `xrStore`'s own notification loop.
+ *
+ * The log is NOT throttled, and `xrStore.subscribe` is a whole-store
+ * subscription that fires far more often than mode transitions (controller/
+ * hand connects, and per-XRFrame detectedPlanes/detectedMeshes deltas during
+ * an AR session). Today's two wrapped bodies only read `state.mode`, so a
+ * throw is a per-transition event at worst - but a future throw introduced
+ * on a per-frame path would log per frame. If that ever happens, add
+ * throttling HERE rather than silencing the subscriber.
  */
 export function guardXRStoreSubscriber(label: string, run: () => void): void {
   try {
